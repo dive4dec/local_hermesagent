@@ -180,6 +180,34 @@ $chat_css = '
         background: #f8d7da;
         border-radius: 0.25rem;
     }
+    .hermes-conv-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .hermes-conv-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .hermes-conv-rename {
+        display: none;
+        padding: 0.1rem 0.3rem;
+        font-size: 0.75rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: #6c757d;
+        flex-shrink: 0;
+        margin-left: 0.25rem;
+    }
+    .hermes-conv-item:hover .hermes-conv-rename {
+        display: inline-block;
+    }
+    .hermes-conv-rename:hover {
+        color: #0d6efd;
+    }
 ';
 echo html_writer::tag('style', $chat_css);
 
@@ -191,6 +219,7 @@ $conversations = $DB->get_records('local_hermesagent_conversations', ['usermodif
 
 // Create new conversation if needed
 $current_id = $conversationid;
+$newly_created = false;
 if ($action == 'new' || ($current_id == 0 && !empty($conversations))) {
     $rec = new stdClass();
     $rec->name = get_string('newconversation', 'local_hermesagent');
@@ -198,6 +227,7 @@ if ($action == 'new' || ($current_id == 0 && !empty($conversations))) {
     $rec->timecreated = time();
     $rec->timemodified = time();
     $current_id = $DB->insert_record('local_hermesagent_conversations', $rec);
+    $newly_created = true;
 } else if ($current_id > 0) {
     $conv = $DB->get_record('local_hermesagent_conversations', ['id' => $current_id], '*', MUST_EXIST);
 } else if (empty($conversations)) {
@@ -207,6 +237,12 @@ if ($action == 'new' || ($current_id == 0 && !empty($conversations))) {
     $rec->timecreated = time();
     $rec->timemodified = time();
     $current_id = $DB->insert_record('local_hermesagent_conversations', $rec);
+    $newly_created = true;
+}
+
+// If we just created a new conversation, re-fetch the list so it includes the new entry
+if ($newly_created) {
+    $conversations = $DB->get_records('local_hermesagent_conversations', ['usermodified' => $USER->id], 'timemodified DESC');
 }
 
 // Get bridge status
@@ -230,7 +266,16 @@ foreach ($conversations as $conv) {
         'class' => 'hermes-conv-item' . $cls,
         'title' => userdate($conv->timemodified),
     ]);
-    echo html_writer::tag('span', format_text($conv->name, FORMAT_PLAIN));
+    echo html_writer::tag('span', format_text($conv->name, FORMAT_PLAIN), [
+        'class' => 'hermes-conv-name',
+        'data-conv-id' => $conv->id,
+    ]);
+    echo html_writer::tag('button', '✎', [
+        'class' => 'hermes-conv-rename',
+        'data-conv-id' => $conv->id,
+        'data-conv-name' => s($conv->name),
+        'title' => get_string('rename', 'local_hermesagent'),
+    ]);
     echo html_writer::end_div();
 }
 echo html_writer::end_div('hermes-conversation-list');

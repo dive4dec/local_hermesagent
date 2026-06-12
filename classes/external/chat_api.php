@@ -43,7 +43,7 @@ class chat_api extends external_api {
         $conv = $DB->get_record('local_hermesagent_conversations', ['id' => $params['conversationid']]);
         if ($conv) {
             $conv->timemodified = time();
-            if ($conv->name === 'New conversation') {
+            if ($conv->name === get_string('newconversation', 'local_hermesagent')) {
                 $conv->name = clean_param(substr($params['message'], 0, 60), PARAM_NOTAGS);
             }
             $DB->update_record('local_hermesagent_conversations', $conv);
@@ -187,4 +187,44 @@ class chat_api extends external_api {
             'deleted' => new external_value(PARAM_BOOL, 'Deleted'),
         ]);
     }
+
+    public static function rename_conversation_parameters() {
+        return new external_function_parameters([
+            'conversationid' => new external_value(PARAM_INT, 'Conversation ID'),
+            'name' => new external_value(PARAM_TEXT, 'New conversation name'),
+        ]);
+    }
+
+    public static function rename_conversation($conversationid, $name) {
+        global $DB, $USER;
+
+        $params = self::validate_parameters(self::rename_conversation_parameters(), [
+            'conversationid' => $conversationid,
+            'name' => $name,
+        ]);
+
+        require_capability('local/hermesagent:use', context_system::instance());
+
+        $conv = $DB->get_record('local_hermesagent_conversations', [
+            'id' => $params['conversationid'],
+            'usermodified' => $USER->id,
+        ], '*');
+
+        if (!$conv) {
+            throw new \moodle_exception('invalidconversation');
+        }
+
+        $conv->name = clean_param(substr($params['name'], 0, 200), PARAM_NOTAGS);
+        $conv->timemodified = time();
+        $DB->update_record('local_hermesagent_conversations', $conv);
+
+        return ['status' => 'ok'];
+    }
+
+    public static function rename_conversation_returns() {
+        return new external_single_structure([
+            'status' => new external_value(PARAM_ALPHA, 'Status'),
+        ]);
+    }
+
 }

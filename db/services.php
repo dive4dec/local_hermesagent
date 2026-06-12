@@ -42,4 +42,12 @@ $functions = [
         'ajax'          => true,
         'capabilities'  => 'local/hermesagent:use',
     ],
+    'local_hermesagent_rename_conversation' => [
+        'classname'     => 'local_hermesagent\\external\\chat_api',
+        'methodname'    => 'rename_conversation',
+        'description'   => 'Rename a conversation',
+        'type'          => 'write',
+        'ajax'          => true,
+        'capabilities'  => 'local/hermesagent:use',
+    ],
 ];

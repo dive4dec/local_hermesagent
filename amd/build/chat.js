@@ -78,6 +78,32 @@ define(['jquery', 'core/ajax', 'core/str'], function($, ajax, Str) {
         $('#hermes-tool-reject').on('click', function() {
             handleToolResponse(false);
         });
+
+        // Rename conversation
+        $(document).on('click', '.hermes-conv-rename', function(e) {
+            e.stopPropagation();
+            var $btn = $(this);
+            var convId = $btn.data('conv-id');
+            var currentName = $btn.data('conv-name');
+
+            var newName = prompt('Rename conversation:', currentName);
+            if (newName && $.trim(newName) && $.trim(newName) !== currentName) {
+                var renamePromises = ajax.call([{
+                    methodname: 'local_hermesagent_rename_conversation',
+                    args: {
+                        conversationid: convId,
+                        name: $.trim(newName)
+                    }
+                }]);
+
+                renamePromises[0].then(function() {
+                    $btn.siblings('.hermes-conv-name').text($.trim(newName));
+                    $btn.data('conv-name', $.trim(newName));
+                }).catch(function(ex) {
+                    console.error('[Hermes] rename failed:', ex);
+                });
+            }
+        });
     };
 
     /**
@@ -133,17 +159,27 @@ define(['jquery', 'core/ajax', 'core/str'], function($, ajax, Str) {
     /**
      * Add assistant message to UI
      */
+    var msgCounter = 0;
+
+    /**
+     * Add assistant message to UI
+     */
     var addAssistantMessage = function() {
-        var html = '<div class="hermes-message hermes-assistant-message" id="hermes-assistant-msg">';
+        msgCounter++;
+        var msgId = 'hermes-assistant-msg-' + msgCounter;
+        var contentId = 'hermes-assistant-content-' + msgCounter;
+        var spinnerId = 'hermes-spinner-' + msgCounter;
+
+        var html = '<div class="hermes-message hermes-assistant-message" id="' + msgId + '">';
         html += '<div class="hermes-avatar hermes-assistant-avatar">H</div>';
         html += '<div class="hermes-bubble hermes-assistant-bubble">';
-        html += '<div class="hermes-content hermes-streaming" id="hermes-assistant-content"></div>';
-        html += '<div class="hermes-spinner" id="hermes-spinner"></div>';
+        html += '<div class="hermes-content hermes-streaming" id="' + contentId + '"></div>';
+        html += '<div class="hermes-spinner" id="' + spinnerId + '"></div>';
         html += '</div></div>';
 
         $('#hermes-chat-area').append(html);
         scrollToEnd();
-        return $('#hermes-assistant-content');
+        return $('#' + contentId);
     };
 
     /**
@@ -154,6 +190,7 @@ define(['jquery', 'core/ajax', 'core/str'], function($, ajax, Str) {
         $('#hermes-send-btn').prop('disabled', true);
 
         var messageEl = addAssistantMessage();
+        var currentSpinnerId = 'hermes-spinner-' + msgCounter;
 
         // Get the message that was stored
         var message = $('#hermes-message-input').data('lastmessage') || '';
@@ -209,21 +246,21 @@ define(['jquery', 'core/ajax', 'core/str'], function($, ajax, Str) {
             eventSource.close();
             isStreaming = false;
             $('#hermes-send-btn').prop('disabled', false);
-            $('#hermes-spinner').remove();
+            $('#' + currentSpinnerId).remove();
         });
 
         eventSource.addEventListener('done', function(e) {
             eventSource.close();
             isStreaming = false;
             $('#hermes-send-btn').prop('disabled', false);
-            $('#hermes-spinner').remove();
+            $('#' + currentSpinnerId).remove();
             messageEl.removeClass('hermes-streaming');
         });
         }).catch(function(ex) {
             console.error('[Hermes] streamResponse error:', ex);
             isStreaming = false;
             $('#hermes-send-btn').prop('disabled', false);
-            $('#hermes-spinner').remove();
+            $('#' + currentSpinnerId).remove();
         });
     };
 

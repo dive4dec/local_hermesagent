@@ -6,7 +6,7 @@
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-define(['jquery', 'core/ajax', 'core/str'], function($, ajax, Str) {
+define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], function($, ajax, Str, mathjaxLoader) {
     var config = {};
     var currentMessage = null;
     var isStreaming = false;
@@ -443,38 +443,60 @@ define(['jquery', 'core/ajax', 'core/str'], function($, ajax, Str) {
     };
     
     /**
-     * Typeset MathJax for an element
+     * Configure Moodle's MathJax loader.
+     * We call mathjaxLoader.configure() with the URL and config that
+     * Moodle's MathJax filter would normally set up, then use
+     * mathjaxLoader.typesetNode() (via loadMathJax + manual typesetPromise).
+     *
+     * NOTE: typesetNode is NOT exported — we work around it by:
+     * 1. Calling configure() to set up MathJax loading
+     * 2. Directly calling MathJax.typesetPromise() after loadMathJax() resolves
      */
-    var typesetMath = function(element) {
-        if (!window.MathJax) {
-            // MathJax not loaded on this page — load it from Moodle's CDN URL
-            var mathjaxUrl = M.cfg.wwwroot + '/filter/mathjaxloader/web/lib/MathJax.js?config=Moodle_html';
-            if (!mathjaxUrl) return;
-            
-            // Load MathJax v4 from the configured CDN
-            var config = {
-                loader: { load: ['ui/safe', '[tex]/ams'] },
+    var mathjaxConfigured = false;
+    var configureMathJax = function() {
+        if (mathjaxConfigured) return;
+        mathjaxConfigured = true;
+        
+        // Use Moodle's MathJax CDN URL (same as filter_mathjaxloader default)
+        var mathjaxUrl = 'https://cdn.jsdelivr.net/npm/mathjax@4.0.0/tex-mml-chtml.js';
+        
+        // Configure MathJax via Moodle's loader
+        mathjaxLoader.configure({
+            mathjaxurl: mathjaxUrl,
+            mathjaxconfig: JSON.stringify({
                 tex: {
                     packages: {'[+]': 'ams'},
                     inlineMath: [['$', '$'], ['\\(', '\\)']],
                     displayMath: [['$$', '$$'], ['\\[', '\\]']]
-                },
-                startup: { typeset: false }
-            };
-            window.MathJax = config;
-            
-            var script = document.createElement('script');
-            script.src = 'https://cdn.jsdelivr.net/npm/mathjax@4.0.0/tex-mml-chtml.js';
-            script.async = true;
-            document.head.appendChild(script);
-        }
+                }
+            }),
+            lang: 'en'
+        });
         
-        // Queue typesetting
-        if (window.MathJax && window.MathJax.typesetPromise) {
-            window.MathJax.typesetPromise([element]).catch(function(err) {
-                console.log('[Hermes] MathJax error:', err);
-            });
-        }
+        console.log('[Hermes] MathJax configured via Moodle loader');
+    };
+    
+    /**
+     * Typeset math in an element using Moodle's MathJax loader
+     */
+    var typesetMath = function(element) {
+        configureMathJax();
+        
+        // Use Moodle's loadMathJax promise, then chain typesetPromise
+        mathjaxLoader.loadMathJax().then(function() {
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                // Chain through startup.promise like Moodle does
+                window.MathJax.startup.promise = window.MathJax.startup.promise
+                    .then(function() {
+                        return window.MathJax.typesetPromise([element]);
+                    })
+                    .catch(function(e) {
+                        console.error('[Hermes] MathJax typeset error:', e);
+                    });
+            }
+        }).catch(function(e) {
+            console.error('[Hermes] MathJax load error:', e);
+        });
     };
     
     /**

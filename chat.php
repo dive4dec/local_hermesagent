@@ -13,6 +13,11 @@ require_once(__DIR__ . '/lib.php');
 require_login();
 require_capability('local/hermesagent:use', context_system::instance());
 
+// Only site admins may access the chat interface
+if (!is_siteadmin()) {
+    throw new moodle_exception('nopermissions', '', '', 'Access restricted to site administrators only.');
+}
+
 $conversationid = optional_param('conversationid', 0, PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
 

@@ -4,6 +4,15 @@ defined('MOODLE_INTERNAL') || die();
 if ($hassiteconfig) {
     $settings = new admin_settingpage('local_hermesagent_settings', get_string('pluginname', 'local_hermesagent'));
 
+// Add a link to open the chat interface
+    $chat_url = new moodle_url('/local/hermesagent/chat.php?action=new');
+    $chat_link_html = '<div style="margin-bottom: 20px;">';
+    $chat_link_html .= '<a href="' . $chat_url->out() . '" class="btn btn-primary" target="_blank">';
+    $chat_link_html .= '<i class="icon fa fa-comments"></i> Open Hermes Chat';
+    $chat_link_html .= '</a>';
+    $chat_link_html .= '</div>';
+    $settings->add(new admin_setting_heading('hermesagent_chat_link', '', $chat_link_html));
+
     $bridge_port = get_config('local_hermesagent', 'bridge_port');
     if (empty($bridge_port)) {
         $bridge_port = '9118';

@@ -1,37 +1,69 @@
 # local_hermesagent — Developer Documentation
 
-## Overview
-
-`local_hermesagent` embeds [Hermes Agent](https://hermes-agent.nousresearch.com/docs) (an AI assistant by Nous Research) inside Moodle. It provides a chat interface with real-time streamed responses, markdown rendering, math equation display via MathJax, tool-calling with human-in-the-loop approval, and persistent learned skills.
-
 **Version:** 0.3.0 (2026061304) | **Moodle:** 5.0+ | **License:** GPL v3+
 
 ---
 
-## Architecture Overview
+## What Is This?
+
+`local_hermesagent` is a Moodle plugin that connects the Moodle LMS to the [Hermes AI Agent framework](https://github.com/nousresearch/hermes). It provides:
+
+- An in-Moodle chat interface with real-time streaming responses
+- Math equation rendering via MathJax
+- Conversation management (create, rename, delete, search)
+- Integration with Moodle's auth, privacy, and user management systems
+- A terminal interface for AI-assisted command execution
+
+It uses the **ACP (Agent Communication Protocol)** bridge to communicate with a local Hermes instance, providing budget-controlled, secure AI access.
+
+## Why Build This?
+
+- Educational institutions want AI within their controlled LMS environment
+- Existing Moodle AI plugins are either too simple (single-call completions) or require external hosting
+- This plugin leverages the full Hermes agent ecosystem (tools, plugins, MCP servers) within Moodle
+- Provides institutional cost controls via the Hermes budget system
+
+## System Requirements
+
+- Moodle 5.x (tested on 5.0+)
+- Python 3.12+ with Hermes CLI installed
+- PHP 8.1+ with cURL, JSON extensions
+- MathJax v4 (CDN: cdn.jsdelivr.net)
+- For the terminal feature: access to a Hermes-managed environment
+
+## Architecture
+
+```
+Moodle Browser ←→ chat.php ←→ api.php ←→ ACP Bridge (localhost:9118) ←→ Hermes Agent ←→ LLM Provider
+                     │              │
+                conversation   web service
+                   table       calls
+```
+
+### Detailed Data Flow
 
 ```
 Browser (chat.js AMD module)
-  |
-  |  AJAX: local_hermesagent_send_message (Moodle web service)
-  |  SSE:  api.php?action=stream (EventSource)
+  │
+  │  AJAX: local_hermesagent_send_message (Moodle web service)
+  │  SSE:  api.php?action=stream (EventSource)
   v
 api.php (Moodle PHP)
-  |
-  |  cURL POST → 127.0.0.1:<bridge_port>/v1/chat/completions
+  │
+  │  cURL POST → 127.0.0.1:<bridge_port>/v1/chat/completions
   v
 acp_bridge.py (FastAPI + uvicorn, Python 3.12)
-  |
-  |  stdio JSON-RPC
+  │
+  │  stdio JSON-RPC
   v
 hermes acp subprocess (one per conversation)
-  |
-  |  HTTP → LLM provider (OpenAI, Anthropic, etc.)
+  │
+  │  HTTP → LLM provider (OpenAI, Anthropic, etc.)
   v
 LLM API
 ```
 
-### Data Flow (Sending a Message)
+### Sending a Message (Step by Step)
 
 1. User types message in `chat.php`, clicks Send.
 2. `chat.js` calls Moodle web service `local_hermesagent_send_message` via `core/ajax`.
@@ -116,15 +148,24 @@ local/hermesagent/
 └── docs/
     └── README.md                     # This file
 ```
+
 ---
 
-## API Endpoints (api.php)
+<!-- ============================================================ -->
+<!-- FOR INTEGRATORS                                               -->
+<!-- ============================================================ -->
+
+## For Integrators
+
+This section covers the API endpoints and web services that connect external systems to the plugin.
+
+### API Endpoints (api.php)
 
 `api.php` exposes actions via the `action` query parameter. All actions require
 `require_login()` and `local/hermesagent:use` capability. CSRF protection uses
 Moodle's `sesskey`.
 
-### Actions
+#### Actions
 
 | Action | Method | Description |
 |--------|--------|-------------|
@@ -135,7 +176,7 @@ Moodle's `sesskey`.
 | `conversations` | GET | List all conversations for the current user. Returns `{conversations: [{id, name, timemodified}]}`. |
 | `tool_response` | POST | Approve/reject a tool call. Returns `{status, messageid, approved}`. |
 
-### SSE Stream Events
+#### SSE Stream Events
 
 The `stream` action uses Server-Sent Events with these event types:
 
@@ -163,9 +204,7 @@ The `message` event carries both `delta` (incremental token) and `full`
 (complete accumulated content). The client uses `full` for real-time
 re-rendering and saves the raw markdown on `done`.
 
----
-
-## External Web Services (db/services.php)
+### External Web Services (db/services.php)
 
 Registered in `db/services.php` and implemented in
 `classes/external/chat_api.php`. Called from the client via Moodle's
@@ -184,70 +223,59 @@ Registered in `db/services.php` and implemented in
 All methods validate conversation ownership (`usermodified = $USER->id`)
 before operating on data.
 
----
+### ACP Bridge (acp_bridge.py)
 
-## Math Rendering Pipeline
+The ACP Bridge is a FastAPI + uvicorn HTTP server that bridges Moodle to
+`hermes acp` subprocesses. It runs as `www-data` on `127.0.0.1` on a
+configurable port (default: 9118).
 
-The plugin renders math equations from LLM output through a 4-stage pipeline
-in `amd/src/chat.js`. This is necessary because marked.js (the markdown parser)
-mangles TeX delimiters like `\[` and `\]` (which it interprets as HTML entity
-escape sequences).
+#### Bridge HTTP Endpoints
 
-```
-LLM Markdown Output
-     │
-     ▼
-┌─────────────────────────────┐
-│ 1. protectMathDelimiters()  │  Replace \[...\], [...], $$...$$
-│                              │  with Unicode placeholders (U+E000,
-│                              │  U+E001) so marked.js skips them.
-└──────────┬──────────────────┘
-           │
-           ▼
-┌─────────────────────────────┐
-│ 2. marked.parse()           │  Convert markdown → HTML.
-│                              │  Math placeholders pass through
-│                              │  untouched.
-└──────────┬──────────────────┘
-           │
-           ▼
-┌─────────────────────────────┐
-│ 3. unescapeMathDelimiters() │  Restore U+E000 → \[ and
-│                              │  U+E001 → \] in the HTML output.
-└──────────┬──────────────────┘
-           │
-           ▼
-┌─────────────────────────────┐
-│ 4. typesetMath(element)     │  Load MathJax v4 via Moodle's
-│                              │  filter_mathjaxloader/loader, then
-│                              │  call MathJax.typesetPromise([el]).
-└──────────┬──────────────────┘
-           │
-           ▼
-      Rendered HTML + Math
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check. Returns session count and Hermes availability. |
+| `/session/create` | POST | Spawn a new `hermes acp` subprocess. Returns `{sid, status}`. |
+| `/session/{sid}/send` | POST | Send message to ACP session. Returns SSE stream of tokens. |
+| `/session/{sid}/tool_call` | POST | Execute a tool call on the session. Returns JSON response. |
+| `/session/{sid}/info` | GET | Session info (PID, alive status). |
+| `/session/{sid}` | DELETE | Kill the ACP subprocess. |
 
-### Protected Delimiter Formats
+#### Environment Variables
 
-| Format | Example | Protected? |
-|--------|---------|------------|
-| LaTeX display | `\[ E = mc^2 \]` | Yes |
-| LaTeX inline | `\( x + y \)` | Converted to `\[...\]` |
-| Display dollars | `$$ E = mc^2 $$` | Yes (converted) |
-| Bare brackets | `[ x^2 ]` on own line | Yes (if math content) |
-| Inline dollars | `$ x + y $` | Not supported (ambiguity) |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HERMES_HOME` | `/var/www/moodledata/.hermes` | Hermes installation directory |
+| `BRIDGE_PORT` | `9118` | HTTP listen port |
+| `MOODLE_DB_HOST` | `mariadb` | Moodle database host |
+| `MOODLE_DB_NAME` | `moodle` | Moodle database name |
+| `MOODLE_DB_USER` | `moodleuser` | Moodle database user |
+| `MOODLE_DB_PASS` | *(empty)* | Moodle database password |
+| `MOODLE_DB_CREDENTIALS_FILE` | *(none)* | Alternative: path to DB env file |
 
-The `isMathContent()` heuristic checks for math symbols (`=`, `+`, `^`, `\frac`,
-`\sin`, `\pi`, `\sum`, `\int`, etc.) to distinguish math from regular
-bracketed text.
+#### Moodle Tool Plugins
+
+| Tool | File | Description |
+|------|------|-------------|
+| `moodle_admin` | `classes/tool/moodle_admin.py` | Read-only queries: courses, users, enrolments, categories |
+| `moodle_schema` | `classes/tool/moodle_schema.py` | Database schema exploration: tables, columns, keys, FKs |
+| `moodle_sql` | `classes/tool/moodle_sql.py` | Safe SQL: SELECT auto-approved, INSERT/UPDATE/DELETE requires approval, DDL blocked |
+| `skill_backup` | `classes/tool/skill_backup.py` | Export/import learned skills to/from JSON |
 
 ---
 
-## JavaScript AMD Module API (chat.js)
+<!-- ============================================================ -->
+<!-- FOR FRONTEND DEVELOPERS                                       -->
+<!-- ============================================================ -->
+
+## For Frontend Developers
+
+This section documents the client-side JavaScript AMD modules and DOM structure.
+
+### JavaScript AMD Module API (chat.js)
 
 Module: `local_hermesagent/chat`
 
-### Public API
+#### Public API
 
 ```javascript
 require(['local_hermesagent/chat'], function(chat) {
@@ -259,7 +287,7 @@ require(['local_hermesagent/chat'], function(chat) {
 });
 ```
 
-### Internal Functions (documented for extension)
+#### Internal Functions (documented for extension)
 
 | Function | Description |
 |----------|-------------|
@@ -289,51 +317,171 @@ require(['local_hermesagent/chat'], function(chat) {
 | `.hermes-conv-item` | Conversation list items (clickable) |
 | `#hermes-new-conv` | "New conversation" button |
 
+### Math Rendering Pipeline
+
+The plugin renders math equations from LLM output through a 4-stage pipeline
+in `amd/src/chat.js`. This is necessary because marked.js (the markdown parser)
+mangles TeX delimiters like `\[` and `\]` (which it interprets as HTML entity
+escape sequences).
+
+```
+LLM Markdown Output
+     │
+     ▼
+┌─────────────────────────────┐
+│ 1. protectMathDelimiters()  │  Replace \[...\], [...], $$...$$
+│                             │  with Unicode placeholders (U+E000,
+│                             │  U+E001) so marked.js skips them.
+└──────────┬──────────────────┘
+           │
+           ▼
+┌─────────────────────────────┐
+│ 2. marked.parse()           │  Convert markdown → HTML.
+│                             │  Math placeholders pass through
+│                             │  untouched.
+└──────────┬──────────────────┘
+           │
+           ▼
+┌─────────────────────────────┐
+│ 3. unescapeMathDelimiters() │  Restore U+E000 → \[ and
+│                             │  U+E001 → \] in the HTML output.
+└──────────┬──────────────────┘
+           │
+           ▼
+┌─────────────────────────────┐
+│ 4. typesetMath(element)     │  Load MathJax v4 via Moodle's
+│                             │  filter_mathjaxloader/loader, then
+│                             │  call MathJax.typesetPromise([el]).
+└──────────┬──────────────────┘
+           │
+           ▼
+      Rendered HTML + Math
+```
+
+#### Protected Delimiter Formats
+
+| Format | Example | Protected? |
+|--------|---------|------------|
+| LaTeX display | `\[ E = mc^2 \]` | Yes |
+| LaTeX inline | `\ (x + y\ )` | Converted to `\[...\]` |
+| Display dollars | `$$ E = mc^2 $$` | Yes (converted) |
+| Bare brackets | `[ x^2 ]` on own line | Yes (if math content) |
+| Inline dollars | `$ x + y $` | Not supported (ambiguity) |
+
+The `isMathContent()` heuristic checks for math symbols (`=`, `+`, `^`, `\frac`,
+`\sin`, `\pi`, `\sum`, `\int`, etc.) to distinguish math from regular
+bracketed text.
+
 ---
 
-## ACP Bridge (acp_bridge.py)
+<!-- ============================================================ -->
+<!-- FOR BACKEND DEVELOPERS                                        -->
+<!-- ============================================================ -->
 
-The ACP Bridge is a FastAPI + uvicorn HTTP server that bridges Moodle to
-`hermes acp` subprocesses. It runs as `www-data` on `127.0.0.1` on a
-configurable port (default: 9118).
+## For Backend Developers
 
-### Bridge HTTP Endpoints
+This section covers the database schema, external PHP functions, and the privacy provider.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check. Returns session count and Hermes availability. |
-| `/session/create` | POST | Spawn a new `hermes acp` subprocess. Returns `{sid, status}`. |
-| `/session/{sid}/send` | POST | Send message to ACP session. Returns SSE stream of tokens. |
-| `/session/{sid}/tool_call` | POST | Execute a tool call on the session. Returns JSON response. |
-| `/session/{sid}/info` | GET | Session info (PID, alive status). |
-| `/session/{sid}` | DELETE | Kill the ACP subprocess. |
+### Database Schema (db/tables.xml)
 
-### Environment Variables
+The plugin defines **5 tables** via XMLDB:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HERMES_HOME` | `/var/www/moodledata/.hermes` | Hermes installation directory |
-| `BRIDGE_PORT` | `9118` | HTTP listen port |
-| `MOODLE_DB_HOST` | `mariadb` | Moodle database host |
-| `MOODLE_DB_NAME` | `moodle` | Moodle database name |
-| `MOODLE_DB_USER` | `moodleuser` | Moodle database user |
-| `MOODLE_DB_PASS` | *(empty)* | Moodle database password |
-| `MOODLE_DB_CREDENTIALS_FILE` | *(none)* | Alternative: path to DB env file |
+#### `local_hermesagent_conversations` — Chat sessions
 
-### Moodle Tool Plugins
+| Column | Type | Key | Description |
+|--------|------|-----|-------------|
+| `id` | int(10) | PK | Auto-increment |
+| `name` | char(255) | | Conversation name (default: "New conversation") |
+| `usermodified` | int(10) | INDEX | Owner user ID (for ownership validation) |
+| `acp_session_id` | char(255) | | ACP Bridge session identifier |
+| `timemodified` | int(10) | | Last activity timestamp |
+| `timecreated` | int(10) | | Creation timestamp |
 
-| Tool | File | Description |
-|------|------|-------------|
-| `moodle_admin` | `classes/tool/moodle_admin.py` | Read-only queries: courses, users, enrolments, categories |
-| `moodle_schema` | `classes/tool/moodle_schema.py` | Database schema exploration: tables, columns, keys, FKs |
-| `moodle_sql` | `classes/tool/moodle_sql.py` | Safe SQL: SELECT auto-approved, INSERT/UPDATE/DELETE requires approval, DDL blocked |
-| `skill_backup` | `classes/tool/skill_backup.py` | Export/import learned skills to/from JSON |
+#### `local_hermesagent_messages` — Chat messages
+
+| Column | Type | Key | Description |
+|--------|------|-----|-------------|
+| `id` | int(10) | PK | Auto-increment |
+| `conversationid` | int(10) | FK→conversations(id) | Parent conversation |
+| `role` | char(20) | | "user" or "assistant" |
+| `content` | text(long) | | Message body (raw markdown for assistant) |
+| `tool_calls` | text(long) | | JSON of tool calls requested |
+| `tool_results` | text(long) | | JSON of tool call results |
+| `timemodified` | int(10) | | Timestamp |
+
+#### `local_hermesagent_settings` — Plugin settings
+
+| Column | Type | Key | Description |
+|--------|------|-----|-------------|
+| `id` | int(10) | PK | Auto-increment |
+| `name` | char(100) | UNIQUE | Setting name |
+| `value` | text | | Setting value |
+| `description` | text | | Human-readable description |
+| `timemodified` | int(10) | | Timestamp |
+
+#### `local_hermesagent_skills` — Learned skills
+
+| Column | Type | Key | Description |
+|--------|------|-----|-------------|
+| `id` | int(10) | PK | Auto-increment |
+| `name` | char(255) | UNIQUE | Skill name |
+| `description` | text | | Skill description |
+| `content` | text | | Skill content/prompt |
+| `category` | char(100) | | Category (default: "general") |
+| `enabled` | int(1) | | Enabled flag (default: 1) |
+| `timemodified` | int(10) | | Timestamp |
+| `timecreated` | int(10) | | Timestamp |
+
+#### `local_hermesagent_tool_log` — Tool execution audit log
+
+| Column | Type | Key | Description |
+|--------|------|-----|-------------|
+| `id` | int(10) | PK | Auto-increment |
+| `messageid` | int(10) | FK→messages(id) | Related message |
+| `tool_name` | char(100) | | Tool that was executed |
+| `input` | text | | Tool input (JSON) |
+| `output` | text | | Tool output |
+| `confirmed` | int(1) | | Human-confirmed flag (default: 0) |
+| `timemodified` | int(10) | | Timestamp |
+
+### External Functions (classes/external/chat_api.php)
+
+The external API class provides 7 methods registered in `db/services.php`. All methods:
+
+- Validate `external_function_parameters()` strictly
+- Check capabilities before execution
+- Verify conversation ownership (`usermodified = $USER->id`)
+- Return typed responses via `external_single_structure` or `external_multiple_structure`
+
+Key implementation notes:
+
+- `send_message()` creates a default conversation if none exists
+- `get_history()` returns messages ordered by `id ASC`
+- `tool_response()` updates the `tool_results` field on the message
+- `delete_conversation()` cascades to messages and tool_log entries
+- `save_assistant_response()` stores the final rendered markdown
+
+### Privacy Provider (classes/privacy/provider.php)
+
+Implements three Moodle privacy interfaces:
+
+- **`metadata\provider`** — Declares `local_hermesagent_conversations` and `local_hermesagent_messages` as containing personal data
+- **`request\core_user_data_provider`** — Exports all conversations and messages for a user as JSON
+- **`request\core_userlist_provider`** — Lists users who have data; deletes data respecting FK order (tool_log → messages → conversations)
 
 ---
 
-## Testing Guide
+<!-- ============================================================ -->
+<!-- FOR MAINTAINERS                                               -->
+<!-- ============================================================ -->
 
-### PHPUnit Tests
+## For Maintainers
+
+This section covers testing, deployment, and Moodle Plugin Directory submission.
+
+### Testing Guide
+
+#### PHPUnit Tests
 
 Create tests under `tests/` following Moodle conventions:
 
@@ -359,7 +507,7 @@ Key areas to test:
 - Privacy data export and deletion
 - Capability enforcement
 
-### JavaScript Testing
+#### JavaScript Testing
 
 The AMD modules use jQuery and Moodle's `core/ajax`. For unit testing:
 
@@ -375,7 +523,7 @@ Key scenarios to verify:
 - Markdown rendering with embedded math
 - Conversation list interactions
 
-### Manual Testing Checklist
+#### Manual Testing Checklist
 
 1. Fresh install: run Notifications, verify tables created
 2. Bootstrap: click "Bootstrap Hermes", verify Python + hermes installed
@@ -388,11 +536,9 @@ Key scenarios to verify:
 9. Privacy delete: delete user data — verify cascading delete
 10. Bridge stop: click Stop — verify graceful shutdown
 
----
+### Development Workflow
 
-## Development Workflow
-
-### Local Development Setup
+#### Local Development Setup
 
 ```bash
 # 1. Install the plugin
@@ -416,7 +562,7 @@ python /path/to/moodle/local/hermesagent/classes/bridge/acp_bridge.py
 #    Set: Developer (MDLDEVELOPER), Display debug messages = Yes
 ```
 
-### Building AMD Modules
+#### Building AMD Modules
 
 After editing `amd/src/chat.js`:
 
@@ -428,7 +574,7 @@ yarn run grunt amd-build
 This generates `amd/build/chat.js` (minified). The build is also
 triggered automatically by Moodle's plugin checker in CI.
 
-### Purging RequireJS Cache
+#### Purging RequireJS Cache
 
 Moodle 5.x caches compiled RequireJS bundles. After installing or updating
 AMD modules, purge the cache:
@@ -441,7 +587,7 @@ The upgrade script (`db/upgrade.php`) also attempts this on version
 2026061204, but a full `purge_all_caches()` call from admin is the
 most reliable approach.
 
-### Adding a New Tool
+#### Adding a New Tool
 
 1. Create `classes/tool/my_tool.py` with argparse CLI interface.
 2. Register it in your Hermes skills/profile configuration.
@@ -449,11 +595,10 @@ most reliable approach.
    executing write operations).
 4. Document in the tool section above.
 
----
+### Moodle Plugin Directory Submission
 
-## Moodle Plugin Directory Submission Checklist
+#### Required Files
 
-### Required Files
 - [x] `version.php` with `$plugin->component`, `$plugin->release`,
       `$plugin->version`, `$plugin->requires`, `$plugin->maturity`
 - [x] `README.txt` (plain text, no markdown)
@@ -461,13 +606,15 @@ most reliable approach.
 - [x] `lang/en/local_hermesagent.php` with pluginname string
 - [x] `db/install.xml` or tables defined in `db/tables.xml`
 
-### Privacy
+#### Privacy
+
 - [x] `classes/privacy/provider.php` implementing all three interfaces
 - [x] Privacy metadata strings in language file
 - [x] Data export functional
 - [x] Data deletion functional (including cascading deletes)
 
-### Security
+#### Security
+
 - [x] `defined('MOODLE_INTERNAL') || die()` in all includeable PHP
 - [x] `require_login()` + capability checks on all pages
 - [x] `require_sesskey()` / `confirm_sesskey()` for CSRF protection
@@ -477,20 +624,23 @@ most reliable approach.
 - [x] Credential file permissions set to 0600
 - [x] Script/iframe injection prevented in markdown (stripped in renderMarkdown)
 
-### Compatibility
+#### Compatibility
+
 - [x] Moodle 5.0+ (requires = 2024100700)
 - [x] PHP 8.1+ (Moodle 5.0 requirement)
 - [x] No deprecated API usage
 - [x] Properly namespaced classes
 
-### Code Quality
+#### Code Quality
+
 - [x] PHPDoc comments on public methods
 - [x] Consistent indentation (4 spaces for PHP, no tabs)
 - [x] No hardcoded strings (all user-facing text in language files)
 - [x] CSS via SCSS/Moodle pipeline, not inline
 - [x] JavaScript as AMD modules
 
-### Before Submitting
+#### Before Submitting
+
 - [ ] Run Moodle's plugin checker: `php admin/cli/validate_plugin.php`
 - [ ] Run codechecker: Site admin > Development > Code checker
 - [ ] Verify all PHP files have proper license headers

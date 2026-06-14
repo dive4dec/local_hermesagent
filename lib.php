@@ -64,7 +64,7 @@ function local_hermesagent_get_skills(?string $category = null, bool $enabled_on
 }
 
 /**
- * Register admin navigation
+ * Register admin navigation — only visible to site admins
  */
 function local_hermesagent_extend_navigation_navigation(settings_navigation $nav, context_system $context) {
     if (!has_capability('local/hermesagent:use', $context)) {
@@ -85,3 +85,4 @@ function local_hermesagent_extend_navigation_navigation(settings_navigation $nav
         $adminnode->add_node($node);
     }
 }
+

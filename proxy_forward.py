@@ -202,11 +202,14 @@ async def handle(reader, writer):
                     if text.startswith("data: "):
                         payload = text[6:]
                         if payload == "[DONE]":
-                            # MULTI-TURN: If we executed tools and ACP didn't continue streaming,
-                            # make a second API call with tool results so the model produces a final answer
-                            if tool_results and not has_final_content:
-                                log.info("MULTI-TURN: making second API call with %d tool results", len(tool_results))
-                                # Build second request with tool results appended
+                            # MULTI-TURN LOOP: Execute tools iteratively until the model produces content
+                            MAX_TOOL_ITERATIONS = 5
+                            iteration = 0
+                            iter_produced_content = []  # Track if each iteration produced content
+                            while tool_results and not has_final_content and iteration < MAX_TOOL_ITERATIONS:
+                                iteration += 1
+                                log.info("MULTI-TURN: iteration %d, making API call with %d tool results", iteration, len(tool_results))
+                                # Build request with tool results appended
                                 second_body = dict(body_dict)
                                 second_body["messages"] = list(body_dict["messages"])
                                 # Add assistant message with tool calls
@@ -219,49 +222,141 @@ async def handle(reader, writer):
                                         "tool_call_id": "call_1",
                                         "content": json.dumps(tr["result"], ensure_ascii=False)
                                     })
-                                # Second API call
-                                log.info("MULTI-TURN: second_body messages=%d", len(second_body.get("messages", [])))
+                                # Log messages
                                 for i, msg in enumerate(second_body.get("messages", [])):
                                     role = msg.get("role", "unknown")
                                     content_len = len(msg.get("content", ""))
-                                    has_tool_calls = "tool_calls" in msg
-                                    has_tool_call_id = "tool_call_id" in msg
-                                    log.info("MULTI-TURN: msg[%d] role=%s content_len=%d has_tool_calls=%s has_tool_call_id=%s",
-                                             i, role, content_len, has_tool_calls, has_tool_call_id)
+                                    has_tc = "tool_calls" in msg
+                                    has_tcid = "tool_call_id" in msg
+                                    log.info("MULTI-TURN[%d]: msg[%d] role=%s content_len=%d has_tool_calls=%s has_tool_call_id=%s",
+                                             iteration, i, role, content_len, has_tc, has_tcid)
                                 async with sess.post(upstream, json=second_body, headers=uh,
                                         timeout=aiohttp.ClientTimeout(total=300)) as resp2:
-                                    second_response = b""
-                                    second_reasoning = 0
-                                    second_delta = 0
+                                    # Accumulate tool call deltas across chunks (they stream incrementally)
+                                    pending_tc = {}  # index -> {name, args_json}
+                                    had_content = False
+                                    finish_reason = None
+                                    iter_content = ""  # Accumulate content for iteration 2
+                                    iter_reasoning = ""  # Accumulate reasoning for iteration 2
                                     while True:
                                         chunk2 = await asyncio.wait_for(resp2.content.readline(), 300)
                                         if not chunk2:
                                             break
-                                        second_response += chunk2
                                         text2 = chunk2.decode("utf-8", errors="replace").strip()
                                         if text2.startswith("data: "):
                                             payload2 = text2[6:]
+                                            if payload2 == "[DONE]":
+                                                continue
                                             try:
                                                 obj2 = json.loads(payload2)
                                                 if obj2.get("choices"):
                                                     for c2 in obj2["choices"]:
                                                         d2 = c2.get("delta", {})
+                                                        fr = c2.get("finish_reason")
+                                                        if fr:
+                                                            finish_reason = fr
+                                                        # Intercept content/reasoning deltas - re-wrap for JS
                                                         if d2.get("reasoning"):
-                                                            second_reasoning += len(d2["reasoning"])
+                                                            iter_reasoning += d2["reasoning"]
+                                                            rewrapped = {"delta": d2["reasoning"], "full": iter_reasoning, "type": "reasoning"}
+                                                            if session_id:
+                                                                rewrapped["session_id"] = session_id
+                                                            writer.write(("data: " + json.dumps(rewrapped) + "\n\n").encode())
+                                                            await writer.drain()
                                                         if d2.get("content"):
-                                                            second_delta += len(d2["content"])
+                                                            if d2["content"].strip():
+                                                                had_content = True
+                                                            iter_content += d2["content"]
+                                                            rewrapped = {"delta": d2["content"], "full": iter_content}
+                                                            if session_id:
+                                                                rewrapped["session_id"] = session_id
+                                                            writer.write(("data: " + json.dumps(rewrapped) + "\n\n").encode())
+                                                            await writer.drain()
+                                                        # Accumulate streaming tool call deltas
+                                                        for tc2 in d2.get("tool_calls", []):
+                                                            tc2_idx = tc2.get("index", 0)
+                                                            tc2_name_delta = tc2.get("function", {}).get("name", "")
+                                                            tc2_args_delta = tc2.get("function", {}).get("arguments", "")
+                                                            if tc2_idx not in pending_tc:
+                                                                pending_tc[tc2_idx] = {"name": tc2_name_delta, "args_json": tc2_args_delta}
+                                                            else:
+                                                                if tc2_name_delta:
+                                                                    pending_tc[tc2_idx]["name"] = tc2_name_delta
+                                                                pending_tc[tc2_idx]["args_json"] += tc2_args_delta
                                                 if obj2.get("done"):
-                                                    log.info("MULTI-TURN: second response DONE")
+                                                    log.info("MULTI-TURN[%d]: done_event, finish_reason=%s, pending_tc=%d", iteration, finish_reason, len(pending_tc))
+                                                    # Send final answer delta if we have content that wasn't part of a tool call flow
+                                                    # The content deltas above already sent incrementally
                                             except:
                                                 pass
-                                        writer.write(chunk2)
-                                        await writer.drain()
-                                    log.info("MULTI-TURN: second response size=%d bytes, reasoning=%d chars, delta=%d chars", len(second_response), second_reasoning, second_delta)
+                                        # Don't forward raw API chunks - we re-wrapped content/reasoning above
+                                        # Only forward tool_call events and other metadata
+                                    # Process accumulated tool calls AFTER streaming completes
+                                    if finish_reason == "tool_calls" and pending_tc:
+                                        log.info("MULTI-TURN[%d]: finish=tool_calls, executing %d accumulated calls", iteration, len(pending_tc))
+                                        more_tool_calls = []
+                                        more_tool_results = []
+                                        for tc_idx in sorted(pending_tc.keys()):
+                                            pt = pending_tc[tc_idx]
+                                            tc2_name = pt["name"]
+                                            tc2_args_raw = pt["args_json"]
+                                            if not tc2_name:
+                                                continue
+                                            try:
+                                                tc2_args = json.loads(tc2_args_raw) if tc2_args_raw.strip() else {}
+                                            except json.JSONDecodeError as e:
+                                                log.warning("MULTI-TURN[%d]: bad JSON for %s: %s [%s]", iteration, tc2_name, str(e), tc2_args_raw[:200])
+                                                tc2_args = {}
+                                            tool_def = next((t for t in TOOLS if t["type"] == "function" and t["function"]["name"] == tc2_name), None)
+                                            if not tool_def:
+                                                log.warning("MULTI-TURN[%d]: unknown tool %s", iteration, tc2_name)
+                                                continue
+                                            required_args = tool_def["function"]["parameters"].get("required", [])
+                                            if not tc2_args and required_args:
+                                                log.warning("MULTI-TURN[%d]: %s has no args (needs %s)", iteration, tc2_name, required_args)
+                                                continue
+                                            log.info("MULTI-TURN[%d]: executing %s(%s)", iteration, tc2_name, json.dumps(tc2_args)[:200])
+                                            result2 = await exec_mcp_tool(tc2_name, tc2_args)
+                                            if not result2 or (isinstance(result2, dict) and result2.get("error")):
+                                                log.warning("MULTI-TURN[%d]: %s -> %s", iteration, tc2_name, str(result2))
+                                                result2 = {"error": str(result2) if result2 else "No result"}
+                                            more_tool_results.append({"name": tc2_name, "result": result2})
+                                            more_tool_calls.append({"id": "call_1", "type": "function", "function": {"name": tc2_name, "arguments": json.dumps(tc2_args)}})
+                                            # Send to browser
+                                            tool_evt = {"tool_call": {"id": "call_1", "name": tc2_name, "input": tc2_args, "result": result2, "status": "completed"}}
+                                            writer.write(("data: " + json.dumps(tool_evt) + "\n\n").encode())
+                                            await writer.drain()
+                                            if isinstance(result2, dict):
+                                                rt = str(result2.get("count", len(result2))) + " rows/keys"
+                                                if "error" in result2:
+                                                    rt = "Error: " + str(result2["error"])
+                                            else:
+                                                rt = str(result2)[:200]
+                                            td = {"delta": "\n🔧 Tool: " + tc2_name + " -> " + rt + "]\n\n"}
+                                            if session_id:
+                                                td["session_id"] = session_id
+                                            writer.write(("data: " + json.dumps(td) + "\n\n").encode())
+                                            await writer.drain()
+                                        # Loop again with new tool results
+                                        tool_results = more_tool_results
+                                        tool_call_messages = more_tool_calls
+                                        accumulated_content = ""
+                                        continue  # Back to while loop for next iteration
+                                    elif had_content:
+                                        log.info("MULTI-TURN[%d]: content produced, done", iteration)
+                                        iter_produced_content.append(True)
+                                        has_final_content = True
+                                    else:
+                                        log.info("MULTI-TURN[%d]: no content, no tools, finish=%s, breaking", iteration, finish_reason)
+                                        iter_produced_content.append(False)
+                                        has_final_content = True
+
                                     # Dump the raw second response for debugging
-                                    log.info("MULTI-TURN: second response raw=%s", second_response.decode("utf-8", errors="replace")[:2000])
-                            # SAFETY NET: If no actual content was produced but we have reasoning,
+                                    # raw response logging removed
+                            # SAFETY NET: If no actual content was produced in ANY iteration but we have reasoning,
                             # send accumulated reasoning as content so the frontend shows something
-                            if accumulated_content.strip() == '' and accumulated_reasoning.strip():
+                            # Only fire if no iteration produced content
+                            if not any(iter_produced_content) and accumulated_content.strip() == '' and accumulated_reasoning.strip():
                                 log.info("SAFETY NET: merging %d bytes of reasoning into content", len(accumulated_reasoning))
                                 reason_evt = {"delta": accumulated_reasoning, "session_id": session_id}
                                 reason_str = "data: " + json.dumps(reason_evt) + "\n\n"
@@ -318,7 +413,7 @@ async def handle(reader, writer):
                                             rt_display = "Error: " + str(result["error"])
                                     else:
                                         rt_display = str(result)[:200]
-                                    tool_result_delta = {"delta": "\n[Tool: " + tc_name + " -> " + rt_display + "]\n\n"}
+                                    tool_result_delta = {"delta": "\n🔧 Tool: " + tc_name + " -> " + rt_display + "]\n\n"}
                                     if session_id:
                                         tool_result_delta["session_id"] = session_id
                                     tr_str = "data: " + json.dumps(tool_result_delta) + "\n\n"
@@ -342,7 +437,7 @@ async def handle(reader, writer):
                                     writer.write(evt_str.encode())
                                     await writer.drain()
                                     rt_display = str(result)[:200] if result else "empty"
-                                    result_delta = {"delta": "\n[Tool: " + tc["name"] + " -> " + rt_display + "]\n\n"}
+                                    result_delta = {"delta": "\n🔧 Tool: " + tc["name"] + " -> " + rt_display + "]\n\n"}
                                     if session_id:
                                         result_delta["session_id"] = session_id
                                     rd_str = "data: " + json.dumps(result_delta) + "\n\n"

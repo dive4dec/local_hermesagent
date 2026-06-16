@@ -6,7 +6,8 @@
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], function($, ajax, Str, mathjaxLoader) {
+define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], function($, ajax, Str, mathjaxLoader){
+    console.log('[Hermes-JS] module loaded');
     var config = {};
     var currentMessage = null;
     var isStreaming = false;
@@ -217,15 +218,34 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
 
         // Handle the 'message' event from api.php SSE stream
         eventSource.addEventListener('message', function(e) {
+            console.log('[Hermes-SSE] message event received, raw:', e.data.substring(0, 200));
             try {
                 var data = JSON.parse(e.data);
-                if (data.full) {
-                    // Track the raw markdown for saving later
-                    rawMarkdown = data.full;
-                    // Render markdown to HTML for display
-                    setMarkdownContent(messageEl, data.full);
+                console.log('[Hermes-SSE] parsed message - type:', data.type, 'delta_len:', (data.delta||'').length, 'full_len:', (data.full||'').length);
+                if (data.full === undefined) return;
+                
+                // Handle reasoning separately - show as collapsible thinking
+                if (data.type === 'reasoning') {
+                    // Add reasoning to a collapsible section
+                    var reasoningId = 'hermes-reasoning-' + msgCounter;
+                    if (!$('#' + reasoningId).length) {
+                        var reasoningHtml = '<details class="hermes-reasoning" id="' + reasoningId + '">';
+                        reasoningHtml += '<summary class="hermes-reasoning-summary">Thinking...</summary>';
+                        reasoningHtml += '<div class="hermes-reasoning-content" id="' + reasoningId + '-content"></div>';
+                        reasoningHtml += '</details>';
+                        messageEl.after(reasoningHtml);
+                    }
+                    // Update reasoning content
+                    var $reasoningContent = $('#' + reasoningId + '-content');
+                    setMarkdownContent($reasoningContent, data.full);
                     scrollToEnd();
+                    return; // Don't accumulate reasoning in rawMarkdown
                 }
+                
+                // Regular delta content - this is the visible answer
+                rawMarkdown = data.full;
+                setMarkdownContent(messageEl, data.full);
+                scrollToEnd();
             } catch(ex) {
                 console.error('SSE parse error:', ex, e.data);
             }
@@ -237,13 +257,16 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         });
 
         eventSource.addEventListener('tool_call', function(e) {
+            console.log('[Hermes-SSE] tool_call event received, raw:', e.data.substring(0, 400));
             var data = JSON.parse(e.data);
+            console.log('[Hermes-SSE] parsed tool_call - name:', data.tool_call?.name, 'has_result:', !!data.tool_call?.result, 'status:', data.tool_call?.status);
             // Show tool call as collapsible section in chat
             addToolCallToChat(data.tool_call);
         });
 
         eventSource.addEventListener('error', function(e) {
-            console.error('SSE error:', e);
+            console.error('[Hermes-SSE] Error:', e);
+            console.error('[Hermes-SSE] EventSource readyState:', eventSource.readyState);
             if (eventSource.url) {
                 console.error('URL:', eventSource.url);
             }
@@ -270,6 +293,7 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         });
 
         eventSource.addEventListener('done', function(e) {
+console.log('[Hermes-SSE] done event received');
             eventSource.close();
             isStreaming = false;
             $('#hermes-send-btn').prop('disabled', false);
@@ -302,18 +326,16 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
      * Add tool call result to chat as a collapsible section
      */
     var addToolCallToChat = function(tc) {
+        console.log('[Hermes-UI] addToolCallToChat called - name:', tc?.name, 'has_result:', !!tc?.result, 'result_type:', typeof tc?.result, 'status:', tc?.status);
         var msgId = 'hermes-tool-call-' + (msgCounter);
         var resultText = '';
-        if (tc.result) {
-            if (typeof tc.result === 'object') {
-                // Check if it's a DB query result with rows
-                if (tc.result.rows) {
-                    resultText = buildTableMarkdown(tc.result);
-                } else {
-                    resultText = JSON.stringify(tc.result, null, 2);
-                }
+        // Guard: result must be a real object with actual data, not an error object
+        var hasResult = tc.result && typeof tc.result === 'object' && !tc.result.error && Object.keys(tc.result).length > 0;
+        if (hasResult) {
+            if (tc.result.rows) {
+                resultText = buildTableMarkdown(tc.result);
             } else {
-                resultText = String(tc.result);
+                resultText = JSON.stringify(tc.result, null, 2);
             }
         }
 
@@ -336,10 +358,14 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         html += '<strong>Input:</strong> ';
         html += '<code>' + escapeHtml(JSON.stringify(tc.input, null, 2)) + '</code>';
         html += '</div>';
-        if (tc.result) {
+        if (hasResult) {
             html += '<div class="hermes-tool-result">';
             html += '<strong>Result:</strong> ';
             html += '<pre>' + escapeHtml(resultText) + '</pre>';
+            html += '</div>';
+        } else if (tc.result && tc.result.error) {
+            html += '<div class="hermes-tool-result" style="color: red;">';
+            html += '<strong>Error:</strong> ' + escapeHtml(tc.result.error);
             html += '</div>';
         }
         html += '</details>';
@@ -379,7 +405,7 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
 
         $('#hermes-tool-modal-body').html(html);
         $('#hermes-tool-modal').show();
-        currentMessage = toolCall;
+        currentMessage = toolCall || {id: tc.id, name: tc.name, input: tc.input, result: tc.result};
     };
 
     /**
@@ -388,20 +414,23 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
     var handleToolResponse = function(approved) {
         if (!currentMessage) return;
 
-        var promises = ajax.call([{
-            methodname: 'local_hermesagent_tool_response',
-            args: {
+        // Call api.php directly - avoids Moodle external API cache issues
+        $.ajax({
+            url: config.api_url + '?action=tool_response',
+            type: 'POST',
+            data: {
+                sesskey: config.sesskey,
                 messageid: currentMessage.id,
-                approved: approved
+                approved: approved ? 1 : 0
+            },
+            success: function() {
+                $('#hermes-tool-modal').hide();
+                currentMessage = null;
+                scrollToEnd();
+            },
+            error: function(ex) {
+                console.error('[Hermes] handleToolResponse failed:', ex);
             }
-        }]);
-
-        promises[0].then(function() {
-            $('#hermes-tool-modal').hide();
-            currentMessage = null;
-            scrollToEnd();
-        }).catch(function(ex) {
-            console.error('[Hermes] handleToolResponse failed:', ex);
         });
     };
 
@@ -460,77 +489,68 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         if (markedPromise) return markedPromise;
         
         markedPromise = new Promise(function(resolve, reject) {
-            // Temporarily hide define.amd so marked falls through to global export
-            var savedAmd = typeof define !== 'undefined' && define.amd;
-            if (typeof define !== 'undefined') {
-                // @ts-ignore
-                define.amd = undefined;
-            }
+            // Use an iframe to load marked without interfering with RequireJS
+            var iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = 'about:blank';
+            document.head.appendChild(iframe);
             
-            var script = document.createElement('script');
+            var win = iframe.contentWindow || iframe.contentDocument.defaultView;
+            var doc = win.document || iframe.contentDocument;
+            
+            // Stub define() in iframe so marked thinks AMD exists but doesn't register
+            var stubScript = doc.createElement('script');
+            stubScript.text = 'var define = function() { return null; };';
+            doc.head.appendChild(stubScript);
+            
+            var script = doc.createElement('script');
             script.src = 'https://cdn.jsdelivr.net/npm/marked@15.0.0/marked.min.js';
             script.onload = function() {
-                // Restore define.amd
-                if (typeof define !== 'undefined' && savedAmd !== undefined) {
-                    define.amd = savedAmd;
-                }
-                
-                if (window.marked) {
-                    markedInstance = window.marked;
-                    // marked v15 uses setOptions()
+                if (win.marked) {
+                    window.marked = win.marked;
+                    markedInstance = win.marked;
                     markedInstance.setOptions({
                         gfm: true,
                         breaks: false,
                         headerIds: false,
                         mangle: false
                     });
+                    document.head.removeChild(iframe);
                     resolve(markedInstance);
                 } else {
-                    reject(new Error('marked loaded but window.marked is undefined'));
+                    document.head.removeChild(iframe);
+                    reject(new Error('marked loaded in iframe but window.marked is undefined'));
                 }
             };
             script.onerror = function() {
-                // Restore define.amd even on error
-                if (typeof define !== 'undefined' && savedAmd !== undefined) {
-                    define.amd = savedAmd;
-                }
+                document.head.removeChild(iframe);
                 reject(new Error('Failed to load marked.js from CDN'));
             };
-            document.head.appendChild(script);
+            doc.head.appendChild(script);
         });
         
         return markedPromise;
     };
-    
+
     /**
-     * Configure Moodle's MathJax loader.
-     * We call mathjaxLoader.configure() with the URL and config that
-     * Moodle's MathJax filter would normally set up, then use
-     * mathjaxLoader.typesetNode() (via loadMathJax + manual typesetPromise).
-     *
-     * NOTE: typesetNode is NOT exported — we work around it by:
-     * 1. Calling configure() to set up MathJax loading
-     * 2. Directly calling MathJax.typesetPromise() after loadMathJax() resolves
+     * Configure MathJax for streaming content.
+     * Called once to set up MathJax config for dynamic typesetting.
      */
     var mathjaxConfigured = false;
     var configureMathJax = function() {
         if (mathjaxConfigured) return;
         mathjaxConfigured = true;
-        
-        // Use Moodle's MathJax CDN URL (same as filter_mathjaxloader default)
-        var mathjaxUrl = 'https://cdn.jsdelivr.net/npm/mathjax@4.0.0/tex-mml-chtml.js';
-        
-        // Configure MathJax via Moodle's loader
-        mathjaxLoader.configure({
-            mathjaxurl: mathjaxUrl,
-            mathjaxconfig: JSON.stringify({
-                tex: {
-                    inlineMath: [['$', '$'], ['\\(', '\\)']],
-                    displayMath: [['$$', '$$'], ['\\[', '\\]']]
-                }
-            }),
-            lang: 'en'
-        });
+        try {
+            if (window.MathJax) {
+                window.MathJax.Hub.Config({
+                    tex2jax: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['\\[', '\\]']] },
+                    showProcessingMessages: false,
+                    messageStyle: 'none'
+                });
+            }
+        } catch(e) {
+            console.warn('[Hermes] configureMathJax error:', e);
+        }
     };
 
     /**
@@ -714,7 +734,13 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
     var setMarkdownContent = function(element, text) {
         renderMarkdown(text).then(function(html) {
             element.html(html);
-            typesetMath(element[0]);
+            try {
+                typesetMath(element[0]);
+            } catch(e) {
+                console.warn('[Hermes] typesetMath failed (non-fatal):', e.message);
+            }
+        }).catch(function(e) {
+            console.warn('[Hermes] setMarkdownContent failed (non-fatal):', e.message);
         });
     };
 

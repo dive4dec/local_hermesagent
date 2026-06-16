@@ -19,7 +19,7 @@ if (empty($bridge_port)) {
     $bridge_port = '9118';
 }
 
-$redirect_url = $CFG->wwwroot . '/local/hermesagent/settings.php';
+$redirect_url = $CFG->wwwroot . '/admin/settings.php?section=local_hermesagent_settings';
 $message = '';
 
 switch ($action) {
@@ -68,4 +68,4 @@ switch ($action) {
         $message = "Unknown action: " . $action;
 }
 
-redirect($redirect_url, $message, 3, \core\output\infolink::INFO);
+redirect($redirect_url, $message, 3, \core\output\notification::NOTIFY_INFO);

@@ -35,7 +35,10 @@ $PAGE->set_context(context_system::instance());
 $PAGE->set_title(get_string('pluginname', 'local_hermesagent'));
 $PAGE->set_heading(get_string('pluginname', 'local_hermesagent'));
 $PAGE->requires->css(new moodle_url('/local/hermesagent/styles/chat.css'));
+// Load the chat AMD module (proper Moodle way)
 $PAGE->requires->js_call_amd('local_hermesagent/chat', 'init');
+
+
 
 echo $OUTPUT->header();
 

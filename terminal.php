@@ -10,7 +10,7 @@ $PAGE->set_context(context_system::instance());
 $PAGE->set_title(get_string('terminal', 'local_hermesagent'));
 $PAGE->set_heading(get_string('pluginname', 'local_hermesagent'));
 
-$hermes_home = '${HERMES_HOME} (default: /var/www/moodledata/.hermes)';
+$hermes_home = '${HERMES_HOME:-/var/www/moodledata/.hermes}';
 $hermes_installed = file_exists("$hermes_home/venv/bin/hermes");
 
 // Load CSS/JS from files — avoids PHP quoting issues with embedded content

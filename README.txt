@@ -154,7 +154,7 @@ Settings:
                      Listens on 127.0.0.1 only.
   Model override  -- Override the LLM model.  Leave blank for default.
   Hermes home     -- Custom HERMES_HOME path.  Default:
-                     ${HERMES_HOME} (default: /var/www/moodledata/.hermes)
+                     ${HERMES_HOME:-/var/www/moodledata/.hermes}
 
 The settings page also shows bridge status (Running/Stopped), current Hermes
 CLI version, number of active ACP sessions, and links to the CLI terminal

@@ -244,7 +244,7 @@ configurable port (default: 9118).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HERMES_HOME` | `${HERMES_HOME} (default: /var/www/moodledata/.hermes)` | Hermes installation directory |
+| `HERMES_HOME` | `${HERMES_HOME:-/var/www/moodledata/.hermes}` | Hermes installation directory |
 | `BRIDGE_PORT` | `9118` | HTTP listen port |
 | `MOODLE_DB_HOST` | `mariadb` | Moodle database host |
 | `MOODLE_DB_NAME` | `moodle` | Moodle database name |
@@ -549,11 +549,11 @@ php admin/cli/upgrade.php
 
 # 3. Bootstrap Hermes
 #    (from admin settings page or manually)
-${HERMES_HOME} (default: /var/www/moodledata/.hermes)/venv/bin/hermes --version
+${HERMES_HOME:-/var/www/moodledata/.hermes}/venv/bin/hermes --version
 
 # 4. Start the bridge
 #    (from admin settings page or manually)
-HERMES_HOME=${HERMES_HOME} (default: /var/www/moodledata/.hermes) \
+HERMES_HOME=${HERMES_HOME:-/var/www/moodledata/.hermes} \
 BRIDGE_PORT=9118 \
 python /path/to/moodle/local/hermesagent/classes/bridge/acp_bridge.py
 

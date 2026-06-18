@@ -28,10 +28,16 @@ $PAGE->set_url(new moodle_url('/local/hermesagent/chat.php', [
 $PAGE->set_context(context_system::instance());
 $PAGE->set_title(get_string('pluginname', 'local_hermesagent'));
 $PAGE->set_heading(get_string('pluginname', 'local_hermesagent'));
-$PAGE->requires->css(new moodle_url('/local/hermesagent/styles/chat.css'));
+# $PAGE->requires->css(new moodle_url('/local/hermesagent/styles/chat.css'));
 $PAGE->requires->js_call_amd('local_hermesagent/chat', 'init');
 
+$css_file = __DIR__ . '/styles/chat.css';
+
 echo $OUTPUT->header();
+
+if (file_exists($css_file)) {
+    echo '<style>' . file_get_contents($css_file) . '</style>';
+}
 
 // Conversation list sidebar
 global $DB;
@@ -71,9 +77,25 @@ if ($newly_created) {
     $conversations = $DB->get_records('local_hermesagent_conversations', ['usermodified' => $USER->id], 'timemodified DESC');
 }
 
-// Get bridge status
 $bridge_port = local_hermesagent_get_bridge_port();
-$bridge_status = local_hermesagent_get_setting('bridge_status', 'stopped');
+if (empty($bridge_port)) {
+    $bridge_port = '9118';
+}
+
+$bridge_status = 'stopped';
+$ch = curl_init("http://127.0.0.1:$bridge_port/health");
+curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_TIMEOUT => 2,
+]);
+$bridge_health = curl_exec($ch);
+$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+if ($bridge_health !== false && $http_code == 200) {
+    $bridge_status = 'running';
+}
+// ========================================================
 
 // Conversation list
 echo html_writer::start_div('hermes-chat-container');
@@ -112,6 +134,7 @@ echo html_writer::link(
     get_string('newconversation', 'local_hermesagent'),
     ['class' => 'btn btn-secondary hermes-new-conv']
 );
+
 // Bridge status indicator
 $status_cls = $bridge_status == 'running' ? 'text-success' : 'text-danger';
 echo html_writer::tag('div', get_string('bridge_status', 'local_hermesagent') . ': <strong class="' . $status_cls . '">' . $bridge_status . '</strong>', [

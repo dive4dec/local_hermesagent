@@ -2,7 +2,7 @@
 # Bootstrap portable Hermes in moodledata/.hermes/
 # All artifacts survive pod restarts (NFS-backed)
 
-HERMES_HOME="${HERMES_HOME} (default: /var/www/moodledata/.hermes)"
+HERMES_HOME="${HERMES_HOME:-/var/www/moodledata/.hermes}"
 echo "=== Hermes Portable Bootstrap ==="
 echo "Target: $HERMES_HOME"
 echo ""

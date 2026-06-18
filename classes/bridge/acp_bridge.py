@@ -1,254 +1,151 @@
 #!/usr/bin/env python3
-"""
-ACP Bridge: HTTP server that bridges Moodle to Hermes Agent via ACP stdio JSON-RPC.
-
-Runs as www-data using the portable Python venv in moodledata/.hermes/.
-Configuration read from Moodle config_plugins table via pymysql.
-"""
-
 import os
-import sys
 import json
-import time
 import uuid
-import signal
 import asyncio
 import subprocess
-from typing import Dict, Optional
-
-HERMES_HOME = os.environ.get("HERMES_HOME", "${HERMES_HOME} (default: /var/www/moodledata/.hermes)")
-PORT = int(os.environ.get("BRIDGE_PORT", "9118"))
-MOODLE_DB_HOST = os.environ.get("MOODLE_DB_HOST", "mariadb")
-MOODLE_DB_NAME = os.environ.get("MOODLE_DB_NAME", "moodle")
-MOODLE_DB_USER = os.environ.get("MOODLE_DB_USER", "moodleuser")
-MOODLE_DB_PASS = os.environ.get("MOODLE_DB_PASS", "")
-
-import pymysql
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+import sys
+from typing import Dict
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse
 import uvicorn
 
-app = FastAPI(title="Hermes ACP Bridge")
+HERMES_HOME = os.environ.get("HERMES_HOME", "/var/www/moodledata/.hermes")
+PORT = int(os.environ.get("BRIDGE_PORT", "9118"))
 
-# Session registry: sid -> ACP process
-sessions: Dict[str, subprocess.Popen] = {}
+app = FastAPI()
 
+class ACPSession:
+    def __init__(self, sid: str):
+        self.sid = sid
+        self.acp_session_id = None
+        cmd = [f"{HERMES_HOME}/venv/bin/hermes", "acp", "--accept-hooks"]
 
-def get_db_config():
-    """Read Moodle config for API key and provider settings."""
-    try:
-        conn = pymysql.connect(
-            host=MOODLE_DB_HOST,
-            database=MOODLE_DB_NAME,
-            user=MOODLE_DB_USER,
-            password=MOODLE_DB_PASS,
-            charset="utf8mb4",
-            cursorclass=pymysql.cursors.DictCursor
+        env = {
+            "OPENAI_API_KEY": "sk-09GH_GyHVObhjBuMN2AmqA",
+            "OPENAI_BASE_URL": "https://socratic.cs.cityu.edu.hk/litellm/v1",
+            "OPENAI_API_BASE": "https://socratic.cs.cityu.edu.hk/litellm/v1",
+            "HERMES_MODEL": "Socrates",
+            "OPENROUTER_API_KEY": "sk-09GH_GyHVObhjBuMN2AmqA",
+            "DISABLE_OPENROUTER": "true"
+        }
+
+        self.proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=sys.stderr,
+            text=True,
+            bufsize=1,
+            cwd=HERMES_HOME,
+            env=env
         )
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT name, value FROM mdl_config_plugins WHERE plugin=%s",
-                ("local_hermesagent",)
-            )
-            rows = cur.fetchall()
-        conn.close()
-        return {row["name"]: row["value"] for row in rows}
-    except Exception as e:
-        print(f"DB config error: {e}", file=sys.stderr)
-        return {}
+        self.req_id = 1
+        print(f"[{sid}] ACP Process started with PID: {self.proc.pid}", flush=True)
 
+    async def send_rpc(self, method: str, params: dict):
+        payload = {"jsonrpc": "2.0", "id": self.req_id, "method": method, "params": params}
+        self.req_id += 1
+        print(f"[SEND] {json.dumps(payload)}", flush=True)
+        self.proc.stdin.write(json.dumps(payload) + "\n")
+        self.proc.stdin.flush()
 
-def spawn_acp_session():
-    """Spawn a new hermes acp subprocess."""
-    hermes_bin = os.path.join(HERMES_HOME, "venv", "bin", "hermes")
-    if not os.path.exists(hermes_bin):
-        raise RuntimeError(f"Hermes not found at {hermes_bin}. Run bootstrap first.")
-    
-    env = os.environ.copy()
-    env["HERMES_HOME"] = HERMES_HOME
-    env["PATH"] = f"{HERMES_HOME}/venv/bin:{env.get('PATH', '/usr/bin:/bin')}"
-    
-    # Read config from DB
-    config = get_db_config()
-    if config.get("hermes_model"):
-        env["HERMES_MODEL"] = config["hermes_model"]
-    
-    proc = subprocess.Popen(
-        [hermes_bin, "acp", "--accept-hooks"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        text=True,
-        bufsize=1
-    )
-    
-    # Wait for it to be ready (first JSON line)
-    try:
-        first_line = proc.stdout.readline()
-        if first_line:
-            print(f"ACP started: {first_line.strip()}")
-    except Exception:
-        pass
-    
-    return proc
+    async def read_response(self):
+        while True:
+            line = await asyncio.to_thread(self.proc.stdout.readline)
+            if not line:
+                return None
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if not line_str.startswith("{"):
+                print(f"[NOISY STDOUT IGNORED] {line_str}", flush=True)
+                continue
 
+            print(f"[RECV JSON] {line_str}", flush=True)
+            try:
+                return json.loads(line_str)
+            except Exception as e:
+                return {"error": {"message": f"JSON Decode Error: {e} | Raw: {line_str}"}}
+
+sessions: Dict[str, ACPSession] = {}
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "hermes_home": HERMES_HOME,
-        "sessions": len(sessions),
-        "hermes_bin": os.path.exists(os.path.join(HERMES_HOME, "venv", "bin", "hermes"))
-    }
+    return {"status": "ok"}
 
-
-@app.post("/session/create")
-def create_session():
-    """Create a new ACP session."""
-    try:
-        proc = spawn_acp_session()
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-    sid = str(uuid.uuid4())[:8]
-    sessions[sid] = proc
-    return {"sid": sid, "status": "created"}
-
-
-@app.post("/session/{sid}/send")
-async def send_message(sid: str, request: dict):
-    """Send a message to an ACP session and stream the response."""
-    if sid not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    proc = sessions[sid]
-    if proc.poll() is not None:
-        del sessions[sid]
-        raise HTTPException(status_code=410, detail="Session ended")
-    
-    message = json.dumps({
-        "jsonrpc": "2.0",
-        "method": "chat/send",
-        "params": {"message": request.get("message", "")}
-    }) + "\n"
-    
-    proc.stdin.write(message)
-    proc.stdin.flush()
-    
-    async def stream_response():
-        try:
-            while True:
-                line = proc.stdout.readline()
-                if not line:
-                    break
-                data = line.strip()
-                if not data:
-                    continue
-                try:
-                    parsed = json.loads(data)
-                    yield f"data: {json.dumps({'type': 'message', 'data': parsed})}\n\n"
-                except json.JSONDecodeError:
-                    yield f"data: {json.dumps({'type': 'raw', 'data': data})}\n\n"
-                await asyncio.sleep(0)
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
-    
-    return StreamingResponse(stream_response(), media_type="text/event-stream")
-
-
-@app.post("/session/{sid}/tool_call")
-def tool_call(sid: str, request: dict):
-    """Call a tool on an ACP session."""
-    if sid not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    proc = sessions[sid]
-    if proc.poll() is not None:
-        del sessions[sid]
-        raise HTTPException(status_code=410, detail="Session ended")
-    
-    tool_call = {
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": request.get("name", ""),
-            "arguments": request.get("arguments", {})
-        }
-    }
-    
-    proc.stdin.write(json.dumps(tool_call) + "\n")
-    proc.stdin.flush()
-    
-    # Read response
-    line = proc.stdout.readline()
-    if line:
-        try:
-            return JSONResponse(content=json.loads(line.strip()))
-        except json.JSONDecodeError:
-            return JSONResponse(content={"raw": line.strip()})
-    
-    raise HTTPException(status_code=504, detail="No response from ACP")
-
-
-@app.delete("/session/{sid}")
-def delete_session(sid: str):
-    """Kill an ACP session."""
-    if sid not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    proc = sessions[sid]
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    del sessions[sid]
-    return {"status": "terminated"}
-
+@app.get("/status")
+def status():
+    return {"status": "running"}
 
 @app.get("/session/{sid}/info")
 def session_info(sid: str):
-    """Get session info."""
     if sid not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
+    proc = sessions[sid].proc
+    return {"sid": sid, "alive": proc.poll() is None}
+
+@app.post("/session/create")
+async def create_session():
+    sid = str(uuid.uuid4())[:8]
+    s = ACPSession(sid)
+    sessions[sid] = s
     
-    proc = sessions[sid]
-    return {
-        "sid": sid,
-        "pid": proc.pid,
-        "alive": proc.poll() is None
-    }
-
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals."""
-    print("Shutting down ACP bridge...")
-    for sid, proc in sessions.items():
-        proc.terminate()
-    sys.exit(0)
-
-
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
-
-
-def main():
-    print(f"ACP Bridge v0.1")
-    print(f"HERMES_HOME={HERMES_HOME}")
-    print(f"Port={PORT}")
-    print(f"DB Host={MOODLE_DB_HOST}")
+    await s.send_rpc("initialize", {"protocolVersion": "1.0", "capabilities": {}})
+    await s.read_response()
     
-    # Verify Hermes is available
-    hermes_bin = os.path.join(HERMES_HOME, "venv", "bin", "hermes")
-    if not os.path.exists(hermes_bin):
-        print(f"ERROR: Hermes not found at {hermes_bin}")
-        print("Run: scripts/bootstrap.sh")
-        sys.exit(1)
+    await s.send_rpc("session/new", {"cwd": HERMES_HOME, "mcpServers": []})
+    resp = await s.read_response()
     
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")
+    if resp and "result" in resp and isinstance(resp["result"], dict):
+        s.acp_session_id = resp["result"].get("sessionId", resp["result"].get("session_id", sid))
+        print(f"[{sid}] Successfully mapped to ACP Session ID: {s.acp_session_id}", flush=True)
+    else:
+        s.acp_session_id = sid
+        
+    return {"sid": sid}
 
+@app.post("/session/{sid}/send")
+async def send_message(sid: str, request: Request):
+    if sid not in sessions: raise HTTPException(status_code=404)
+    data = await request.json()
+    s = sessions[sid]
+    
+    user_msg = data.get("message", "")
+    prompt_payload = [{"type": "text", "text": user_msg}]
+    
+    await s.send_rpc("session/prompt", {
+        "sessionId": s.acp_session_id,
+        "session_id": s.acp_session_id, 
+        "prompt": prompt_payload
+    })
+    
+    async def stream():
+        while True:
+            r = await s.read_response()
+            if not r: break
+            
+            print(f"[STREAM DEBUG] {r}", flush=True)
+            
+            if "error" in r:
+                yield f"data: {json.dumps({'type':'error', 'data':r['error'].get('message')})}\n\n"
+                break
+            
+            params = r.get("params", {})
+            update = params.get("update", {})
+            session_update = update.get("sessionUpdate", "")
+
+            if session_update == "agent_message_chunk":
+                delta_text = update.get("content", {}).get("text", "")
+                if delta_text:
+                    yield f"data: {json.dumps({'type':'message', 'data':{'delta': delta_text}})}\n\n"
+            
+            if "result" in r and isinstance(r["result"], dict):
+                if r["result"].get("stopReason") == "end_turn":
+                    yield f"data: {json.dumps({'type':'message', 'data':{'done':True}})}\n\n"
+                    break
+                
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

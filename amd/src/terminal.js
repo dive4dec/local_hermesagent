@@ -20,7 +20,7 @@ define(['jquery'], function($) {
         }
 
         appendOutput('Hermes Terminal — connected');
-        appendOutput('HERMES_HOME=${HERMES_HOME} (default: /var/www/moodledata/.hermes)');
+        appendOutput('HERMES_HOME=${HERMES_HOME:-/var/www/moodledata/.hermes}');
         appendOutput("Type 'hermes --help' to get started.\n");
 
         inputEl.on('keydown', function(e) {

@@ -11,7 +11,7 @@ confirm_sesskey();
 $bridge_port = get_config('local_hermesagent', 'bridge_port');
 if (empty($bridge_port)) $bridge_port = '9118';
 
-$hermes_home = '${HERMES_HOME} (default: /var/www/moodledata/.hermes)';
+$hermes_home = '${HERMES_HOME:-/var/www/moodledata/.hermes}';
 $bridge_script = $CFG->dirroot . '/local/hermesagent/classes/bridge/acp_bridge.py';
 
 if ($action === 'start') {
@@ -36,7 +36,7 @@ if ($action === 'start') {
     chmod($cred_file, 0600);
 
     $cmd = sprintf(
-        '${HERMES_HOME} BRIDGE_PORT=%d MOODLE_DB_CREDENTIALS_FILE=%s nohup %s/venv/bin/python %s > ${HERMES_HOME} (default: /var/www/moodledata/.hermes)/logs/bridge.log 2>&1 & echo $!',
+        '${HERMES_HOME} BRIDGE_PORT=%d MOODLE_DB_CREDENTIALS_FILE=%s nohup %s/venv/bin/python %s > ${HERMES_HOME:-/var/www/moodledata/.hermes}/logs/bridge.log 2>&1 & echo $!',
         escapeshellarg($hermes_home),
         $bridge_port,
         escapeshellarg($cred_file),

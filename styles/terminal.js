@@ -142,7 +142,7 @@
 
     // Welcome
     append('Hermes Terminal');
-    append('HERMES_HOME=${HERMES_HOME} (default: /var/www/moodledata/.hermes)');
+    append('HERMES_HOME=${HERMES_HOME:-/var/www/moodledata/.hermes}');
     append("Type 'hermes --help' to get started.");
     append('');
 

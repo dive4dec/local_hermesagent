@@ -5,7 +5,7 @@ require_once(__DIR__ . '/lib.php');
 require_login();
 require_capability('local/hermesagent:configure', context_system::instance());
 
-$hermes_home = '${HERMES_HOME} (default: /var/www/moodledata/.hermes)';
+$hermes_home = '${HERMES_HOME:-/var/www/moodledata/.hermes}';
 $venv_bin = "$hermes_home/venv/bin";
 $log_dir = "/tmp/hermes_terminal";
 @mkdir($log_dir, 0700, true);

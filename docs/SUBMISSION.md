@@ -45,7 +45,7 @@ Moodle plugins should **bundle all JS**. The fix:
 - Remove the dynamic script loading
 
 ### 3. Hardcoded Paths
-Paths like `${HERMES_HOME} (default: /var/www/moodledata/.hermes)`, `/var/www/html`, `/tmp/hermes_terminal` appear in:
+Paths like `${HERMES_HOME:-/var/www/moodledata/.hermes}`, `/var/www/html`, `/tmp/hermes_terminal` appear in:
 - `exec.php`, `terminal.php`, `local_hermesagent_settings.php`, `scripts/bootstrap.sh`, `terminal.js`
 
 These must use plugin config or `$CFG->dataroot`. For example:

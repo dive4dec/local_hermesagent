@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/hermesagent/db" VERSION="20260612" COMMENT="Hermes Agent plugin tables">
+    <TABLES>
+        <TABLE NAME="local_hermesagent_settings" COMMENT="Plugin settings">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="name" TYPE="char" LENGTH="100" NOTNULL="true"/>
+                <FIELD NAME="value" TYPE="text" NOTNULL="false"/>
+                <FIELD NAME="description" TYPE="text" NOTNULL="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="name" TYPE="unique" FIELDS="name"/>
+            </KEYS>
+        </TABLE>
+
+        <TABLE NAME="local_hermesagent_conversations" COMMENT="Chat sessions">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT="New conversation"/>
+                <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+                <FIELD NAME="acp_session_id" TYPE="char" LENGTH="255" NOTNULL="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="usermodified" UNIQUE="false" FIELDS="usermodified"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="local_hermesagent_messages" COMMENT="Chat messages">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="conversationid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+                <FIELD NAME="role" TYPE="char" LENGTH="20" NOTNULL="true"/>
+                <FIELD NAME="content" TYPE="text" LENGTH="long" NOTNULL="true"/>
+                <FIELD NAME="tool_calls" TYPE="text" LENGTH="long" NOTNULL="false"/>
+                <FIELD NAME="tool_results" TYPE="text" LENGTH="long" NOTNULL="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="conversationid" TYPE="foreign" FIELDS="conversationid" REFTABLE="local_hermesagent_conversations" REFFIELDS="id"/>
+            </KEYS>
+        </TABLE>
+
+        <TABLE NAME="local_hermesagent_skills" COMMENT="Learned skills">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true"/>
+                <FIELD NAME="description" TYPE="text" NOTNULL="false"/>
+                <FIELD NAME="content" TYPE="text" NOTNULL="true"/>
+                <FIELD NAME="category" TYPE="char" LENGTH="100" NOTNULL="false" DEFAULT="general"/>
+                <FIELD NAME="enabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="name" TYPE="unique" FIELDS="name"/>
+            </KEYS>
+        </TABLE>
+
+        <TABLE NAME="local_hermesagent_tool_log" COMMENT="Tool execution log">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="messageid" TYPE="int" LENGTH="10" NOTNULL="false"/>
+                <FIELD NAME="tool_name" TYPE="char" LENGTH="100" NOTNULL="true"/>
+                <FIELD NAME="input" TYPE="text" NOTNULL="false"/>
+                <FIELD NAME="output" TYPE="text" NOTNULL="false"/>
+                <FIELD NAME="confirmed" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="messageid" TYPE="foreign" FIELDS="messageid" REFTABLE="local_hermesagent_messages" REFFIELDS="id"/>
+            </KEYS>
+        </TABLE>
+    </TABLES>
+</XMLDB>

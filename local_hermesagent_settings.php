@@ -11,7 +11,11 @@ confirm_sesskey();
 $bridge_port = get_config('local_hermesagent', 'bridge_port');
 if (empty($bridge_port)) $bridge_port = '9118';
 
+<<<<<<< HEAD
 $hermes_home = '${HERMES_HOME:-/var/www/moodledata/.hermes}';
+=======
+$hermes_home = '/var/www/moodledata/.hermes';
+>>>>>>> upstream/main
 $bridge_script = $CFG->dirroot . '/local/hermesagent/classes/bridge/acp_bridge.py';
 
 if ($action === 'start') {

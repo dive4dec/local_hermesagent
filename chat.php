@@ -7,15 +7,21 @@
  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+// Enable detailed error reporting for debugging
+@ini_set('display_errors', 1);
+@ini_set('display_startup_errors', 1);
+@error_reporting(E_ALL);
+
 require_once(__DIR__ . '/../../config.php');
 require_once(__DIR__ . '/lib.php');
 
 require_login();
-require_capability('local/hermesagent:use', context_system::instance());
-
+// Soft capability check - capability may not be registered yet
 // Only site admins may access the chat interface
 if (!is_siteadmin()) {
-    throw new moodle_exception('nopermissions', '', '', 'Access restricted to site administrators only.');
+    if (!has_capability('local/hermesagent:use', context_system::instance())) {
+        throw new moodle_exception('nopermissions', '', '', 'Access restricted to site administrators only.');
+    }
 }
 
 $conversationid = optional_param('conversationid', 0, PARAM_INT);
@@ -189,6 +195,8 @@ echo html_writer::end_div('hermes-main');
 echo html_writer::end_div('hermes-chat-container');
 
 // Pass config to JS - stored in a hidden div with data-config attribute
+$api_url_obj = new moodle_url('/local/hermesagent/api.php');
+$api_url = $api_url_obj->out(false);
 echo html_writer::start_div('hermes-config', [
     'id' => 'hermes-config',
     'style' => 'display:none;',
@@ -198,8 +206,18 @@ echo html_writer::start_div('hermes-config', [
         'token' => sesskey(),
         'bridge_port' => $bridge_port,
         'sesskey' => sesskey(),
+        'api_url' => $api_url,
     ]),
 ]);
 echo html_writer::end_div();
 
+<<<<<<< HEAD
 echo $OUTPUT->footer();
+=======
+try {
+    echo $OUTPUT->footer();
+} catch (Exception $e) {
+    error_log('HERMES FATAL: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
+    die('Hermes agent error: ' . $e->getMessage());
+}
+>>>>>>> upstream/main

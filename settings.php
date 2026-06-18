@@ -50,6 +50,10 @@ if ($hassiteconfig) {
         $health_data = json_decode($bridge_health, true);
     }
 
+<<<<<<< HEAD
+=======
+    $hermes_home = '/var/www/moodledata/.hermes';
+>>>>>>> upstream/main
     $hermes_installed = file_exists("$hermes_home/venv/bin/hermes");
     $hermes_version = 'Not installed';
     if ($hermes_installed) {

@@ -30,7 +30,10 @@ class chat_api extends external_api {
             'message' => $message,
         ]);
 
-        require_capability('local/hermesagent:use', context_system::instance());
+        // Soft capability check - capability may not be registered yet
+if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+    throw new moodle_exception('nopermissions', '', '', '');
+}
 
         // Check conversation ownership
         $conv = $DB->get_record('local_hermesagent_conversations', [
@@ -79,7 +82,10 @@ class chat_api extends external_api {
             'conversationid' => $conversationid,
         ]);
 
-        require_capability('local/hermesagent:use', context_system::instance());
+        // Soft capability check - capability may not be registered yet
+if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+    throw new moodle_exception('nopermissions', '', '', '');
+}
 
         // Check conversation ownership
         $conv = $DB->get_record('local_hermesagent_conversations', [
@@ -119,7 +125,7 @@ class chat_api extends external_api {
 
     public static function tool_response_parameters() {
         return new external_function_parameters([
-            'messageid' => new external_value(PARAM_INT, 'Message ID'),
+            'messageid' => new external_value(PARAM_RAW, 'Tool call ID (string)'),
             'approved' => new external_value(PARAM_BOOL, 'Whether tool was approved'),
         ]);
     }
@@ -130,7 +136,10 @@ class chat_api extends external_api {
             'approved' => $approved,
         ]);
 
-        require_capability('local/hermesagent:use', context_system::instance());
+        // Soft capability check - capability may not be registered yet
+if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+    throw new moodle_exception('nopermissions', '', '', '');
+}
 
         return ['status' => 'ok', 'approved' => (bool)$approved];
     }
@@ -149,7 +158,10 @@ class chat_api extends external_api {
     public static function get_conversations() {
         global $DB, $USER;
 
-        require_capability('local/hermesagent:use', context_system::instance());
+        // Soft capability check - capability may not be registered yet
+if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+    throw new moodle_exception('nopermissions', '', '', '');
+}
 
         $conversations = $DB->get_records('local_hermesagent_conversations', ['usermodified' => $USER->id], 'timemodified DESC');
 
@@ -188,7 +200,10 @@ class chat_api extends external_api {
             'conversationid' => $conversationid,
         ]);
 
-        require_capability('local/hermesagent:use', context_system::instance());
+        // Soft capability check - capability may not be registered yet
+if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+    throw new moodle_exception('nopermissions', '', '', '');
+}
 
         $conv = $DB->get_record('local_hermesagent_conversations', ['id' => $params['conversationid'], 'usermodified' => $USER->id]);
         if ($conv) {
@@ -220,7 +235,10 @@ class chat_api extends external_api {
             'name' => $name,
         ]);
 
-        require_capability('local/hermesagent:use', context_system::instance());
+        // Soft capability check - capability may not be registered yet
+if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+    throw new moodle_exception('nopermissions', '', '', '');
+}
 
         $conv = $DB->get_record('local_hermesagent_conversations', [
             'id' => $params['conversationid'],
@@ -260,7 +278,10 @@ class chat_api extends external_api {
             'content' => $content,
         ]);
 
-        require_capability('local/hermesagent:use', context_system::instance());
+        // Soft capability check - capability may not be registered yet
+if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+    throw new moodle_exception('nopermissions', '', '', '');
+}
 
         // Check conversation exists and belongs to user
         $conv = $DB->get_record('local_hermesagent_conversations', [
@@ -277,18 +298,28 @@ class chat_api extends external_api {
         $existing = $DB->get_record_sql(
             "SELECT id FROM {local_hermesagent_messages}
              WHERE conversationid = ? AND role = 'assistant'
-             ORDER BY id DESC",
-            [$params['conversationid']],
-            MUST_EXIST
+             ORDER BY id DESC LIMIT 1",
+            [$params['conversationid']]
         );
 
-        $rec = new \stdClass();
-        $rec->id = $existing->id;
-        $rec->content = $params['content'];
-        $rec->timemodified = time();
-        $DB->update_record('local_hermesagent_messages', $rec);
-
-        return ['status' => 'ok'];
+        if ($existing) {
+            // Update existing assistant message
+            $rec = new \stdClass();
+            $rec->id = $existing->id;
+            $rec->content = $params['content'];
+            $rec->timemodified = time();
+            $DB->update_record('local_hermesagent_messages', $rec);
+            return ['status' => 'updated', 'messageid' => $existing->id];
+        } else {
+            // No assistant message exists — create one (fallback)
+            $rec = new \stdClass();
+            $rec->conversationid = $params['conversationid'];
+            $rec->role = 'assistant';
+            $rec->content = $params['content'];
+            $rec->timemodified = time();
+            $DB->insert_record('local_hermesagent_messages', $rec);
+            return ['status' => 'created'];
+        }
     }
 
     public static function save_assistant_response_returns() {

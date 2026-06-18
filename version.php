@@ -10,7 +10,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'local_hermesagent';
-$plugin->release   = '0.3.2';
-$plugin->version   = 2026061306;
+$plugin->release   = '0.3.5';
+$plugin->version   = 2026061611;
 $plugin->requires  = 2024100700; // Moodle 5.0+
 $plugin->maturity  = MATURITY_BETA;

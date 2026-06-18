@@ -44,7 +44,7 @@ if [ ! -f "$PYTHON_BIN" ]; then
 
         echo "  Extracting..."
         mkdir -p "$HERMES_HOME/python"
-        tar xzf "$TMPFILE" -C "$HERMES_HOME/python" --strip-components=1 2>&1
+        tar xzf "$TMPFILE" -C "$HERMES_HOME/python" --strip-components=1 2>/dev/null
         rm -f "$TMPFILE"
         echo "  Python installed: $PYTHON_BIN"
     else
@@ -68,34 +68,89 @@ fi
 echo ""
 
 # Step 3: Install packages
-echo "[3/5] Installing hermes-agent + aiohttp + pymysql..."
-"$HERMES_HOME/venv/bin/python" -m pip install --quiet hermes-agent aiohttp pymysql 2>&1
+echo "[3/6] Installing hermes-agent + aiohttp + pymysql + mcp..."
+"$HERMES_HOME/venv/bin/python" -m pip install --quiet hermes-agent aiohttp pymysql mcp 2>&1
 HERMES_VERSION=$("$HERMES_HOME/venv/bin/hermes" --version 2>&1)
 echo "  $HERMES_VERSION"
-echo "  aiohttp + pymysql installed"
+echo "  aiohttp + pymysql + mcp installed"
+echo ""
+
+# Step 3b: Setup Moodle DB MCP server for Hermes
+echo "[3b/6] Setting up Moodle DB MCP server..."
+PLUGIN_DIR="$(dirname "$(dirname "$0")")"
+MCP_SCRIPT="$PLUGIN_DIR/scripts/moodle_db_mcp.py"
+MCP_DEST="$HERMES_HOME/mcp_servers/moodle_db_mcp.py"
+mkdir -p "$HERMES_HOME/mcp_servers"
+if [ -f "$MCP_SCRIPT" ]; then
+    cp "$MCP_SCRIPT" "$MCP_DEST"
+    chmod +x "$MCP_DEST"
+    echo "  ✅ MCP server script: $MCP_DEST"
+else
+    echo "  ⚠ MCP script not found at $MCP_SCRIPT, skipping"
+fi
+
+# Add MCP server config to HERMES_HOME/config.yaml
+CONFIG_FILE="$HERMES_HOME/config.yaml"
+if [ -f "$CONFIG_FILE" ]; then
+    if grep -q "moodle_db:" "$CONFIG_FILE" 2>/dev/null; then
+        echo "  ✅ MCP config already in $CONFIG_FILE"
+    else
+        echo "  Adding mcp_servers.moodle_db to $CONFIG_FILE"
+        "$HERMES_HOME/venv/bin/python" -c "
+import yaml, os
+path = os.environ.get('CFG')
+with open(path) as f:
+    cfg = yaml.safe_load(f) or {}
+if 'mcp_servers' not in cfg:
+    cfg['mcp_servers'] = {}
+hermes_home = os.environ.get('HERMES_HOME', '/var/www/moodledata/.hermes')
+cfg['mcp_servers']['moodle_db'] = {
+    'command': os.path.join(hermes_home, 'venv/bin/python'),
+    'args': [os.path.join(hermes_home, 'mcp_servers/moodle_db_mcp.py')],
+    'timeout': 60,
+    'connect_timeout': 30
+}
+with open(path, 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, width=120)
+print('  ✅ MCP config written')
+" CFG="$CONFIG_FILE" HERMES_HOME="$HERMES_HOME" 2>&1
+    fi
+else
+    echo "  ⚠ No config.yaml found at $CONFIG_FILE, skipping MCP config"
+fi
 echo ""
 
 # Step 4: Persist hermes_proxy_forward.py if it's only in /tmp/
 mkdir -p "$HERMES_HOME/scripts"
 if [ -f /tmp/hermes_proxy_forward.py ] && [ ! -f "$HERMES_HOME/scripts/hermes_proxy_forward.py" ]; then
-    echo "[4/5] Persisting hermes_proxy_forward.py..."
+    echo "[4/6] Persisting hermes_proxy_forward.py..."
     cp /tmp/hermes_proxy_forward.py "$HERMES_HOME/scripts/hermes_proxy_forward.py"
     chmod +x "$HERMES_HOME/scripts/hermes_proxy_forward.py"
     echo "  ✅ Copied to $HERMES_HOME/scripts/"
 elif [ -f "$HERMES_HOME/scripts/hermes_proxy_forward.py" ]; then
-    echo "[4/5] hermes_proxy_forward.py already persistent"
+    echo "[4/6] hermes_proxy_forward.py already persistent"
 else
-    echo "[4/5] hermes_proxy_forward.py not found anywhere"
+    echo "[4/6] hermes_proxy_forward.py not found anywhere"
 fi
 echo ""
 
-# Step 5: Start proxy via tmux if not already running
-if tmux has-session -t hermes-proxy 2>/dev/null; then
-    echo "[5/5] hermes-proxy tmux session already running"
+# Step 5: Start Hermes ACP as www-data in tmux (not root!)
+echo "[5/6] Starting Hermes ACP as www-data in tmux..."
+if tmux has-session -t hermes-acp 2>/dev/null; then
+    echo "  hermes-acp tmux session already running"
+    # Check if it's actually running (not zombie)
+    if tmux capture-pane -t hermes-acp -p 2>/dev/null | grep -q "ACP client connected"; then
+        echo "  ✅ ACP is healthy"
+    else
+        echo "  ACP not healthy, restarting..."
+        tmux kill-session -t hermes-acp 2>/dev/null
+        sleep 1
+        tmux new-session -d -s hermes-acp -x 80 -y 24 "su -s /bin/sh -c \"HERMES_HOME=$HERMES_HOME $HERMES_HOME/venv/bin/hermes acp\" www-data"
+        echo "  ✅ Restarted"
+    fi
 else
-    echo "[5/5] Starting hermes-proxy in tmux..."
-    tmux new-session -d -s hermes-proxy -x 80 -y 24 "$HERMES_HOME/venv/bin/python3 $HERMES_HOME/scripts/hermes_proxy_forward.py"
-    echo "  ✅ Started"
+    tmux new-session -d -s hermes-acp -x 80 -y 24 "su -s /bin/sh -c \"HERMES_HOME=$HERMES_HOME $HERMES_HOME/venv/bin/hermes acp\" www-data"
+    echo "  ✅ Started as www-data"
 fi
 echo ""
 
@@ -103,13 +158,41 @@ echo ""
 echo "=== Verification ==="
 if "$HERMES_HOME/venv/bin/hermes" --version >/dev/null 2>&1; then
     echo "  hermes: OK"
-    if "$HERMES_HOME/venv/bin/hermes" acp --help >/dev/null 2>&1; then
-        echo "  hermes acp: OK"
-    else
-        echo "  hermes acp: needs config"
-    fi
 else
     echo "  WARNING: hermes --version failed"
+fi
+
+# Check MCP config
+if [ -f "$HERMES_HOME/config.yaml" ] && grep -q "moodle_db:" "$HERMES_HOME/config.yaml" 2>/dev/null; then
+    echo "  mcp_servers.moodle_db: configured"
+    if [ -f "$HERMES_HOME/mcp_servers/moodle_db_mcp.py" ]; then
+        echo "  mcp_server script: present"
+    else
+        echo "  mcp_server script: MISSING"
+    fi
+else
+    echo "  mcp_servers.moodle_db: NOT configured"
+fi
+
+# Check ACP status
+echo ""
+echo "=== ACP Status ==="
+if tmux has-session -t hermes-acp 2>/dev/null; then
+    ACP_OUTPUT=$(tmux capture-pane -t hermes-acp -p 2>/dev/null)
+    if echo "$ACP_OUTPUT" | grep -q "ACP client connected"; then
+        echo "  hermes-acp: running (www-data)"
+        # Check MCP tools
+        if echo "$ACP_OUTPUT" | grep -q "mcp_moodle_db"; then
+            MCP_COUNT=$(echo "$ACP_OUTPUT" | grep -c "mcp_moodle_db")
+            echo "  MCP tools: $MCP_COUNT discovered"
+        else
+            echo "  MCP tools: NOT discovered yet (may need restart)"
+        fi
+    else
+        echo "  hermes-acp: tmux exists but ACP not connected"
+    fi
+else
+    echo "  hermes-acp: NOT running"
 fi
 
 echo ""

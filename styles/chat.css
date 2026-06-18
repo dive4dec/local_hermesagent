@@ -346,3 +346,49 @@
 }
 
 /*# sourceMappingURL=chat.css.map */
+
+/* Tool call collapsible sections */
+.hermes-tool-call .hermes-tool-bubble {
+    background: #f8f9fa;
+    border-left: 3px solid #6c757d;
+    padding: 8px 12px;
+}
+.hermes-tool-details {
+    margin: 0;
+}
+.hermes-tool-summary {
+    cursor: pointer;
+    font-size: 0.85em;
+    color: #495057;
+    padding: 4px 0;
+    list-style: none;
+}
+.hermes-tool-summary::-webkit-details-marker { display: none; }
+.hermes-tool-summary::before {
+    content: "\25B6";
+    display: inline-block;
+    margin-right: 4px;
+    transition: transform 0.15s;
+}
+.hermes-tool-details[open] .hermes-tool-summary::before {
+    transform: rotate(90deg);
+}
+.hermes-tool-icon {
+    font-size: 1em;
+}
+.hermes-tool-input, .hermes-tool-result {
+    margin: 8px 0;
+    font-size: 0.85em;
+}
+.hermes-tool-input code, .hermes-tool-result pre {
+    background: #2d2d2d;
+    color: #f8f8f2;
+    padding: 8px 12px;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.4;
+}
+.hermes-tool-status {
+    font-size: 0.9em;
+}

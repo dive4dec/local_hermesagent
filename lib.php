@@ -47,6 +47,32 @@ function local_hermesagent_get_bridge_port(): int {
 }
 
 /**
+ * Live-check the ACP bridge health and sync the DB.
+ * Replaces stale DB-only reads with a real HTTP ping.
+ */
+function local_hermesagent_check_bridge_status(): string {
+    $bridge_port = local_hermesagent_get_bridge_port();
+
+    $ch = curl_init("http://127.0.0.1:$bridge_port/health");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 2,
+    ]);
+
+    $resp = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($resp !== false && $http_code === 200) {
+        local_hermesagent_set_setting('bridge_status', 'running');
+        return 'running';
+    } else {
+        local_hermesagent_set_setting('bridge_status', 'stopped');
+        return 'stopped';
+    }
+}
+
+/**
  * Get all learned skills (enabled only)
  */
 function local_hermesagent_get_skills(?string $category = null, bool $enabled_only = true): array {

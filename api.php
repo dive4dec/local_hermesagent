@@ -370,24 +370,9 @@ function api_stream_response(): void {
  */
 function api_bridge_status(): void {
     $bridge_port = local_hermesagent_get_bridge_port();
-    $bridge_status = local_hermesagent_get_setting('bridge_status', 'stopped');
-    
-    // Try to ping the bridge
-    $online = false;
-    $ch = curl_init("http://127.0.0.1:$bridge_port/health");
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 3,
-    ]);
-    $resp = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    if ($resp !== false && $http_code === 200) {
-        $online = true;
-        local_hermesagent_set_setting('bridge_status', 'running');
-        $bridge_status = 'running';
-    }
-    curl_close($ch);
-    
+    $bridge_status = local_hermesagent_check_bridge_status();
+    $online = ($bridge_status === 'running');
+
     send_json_response([
         'status' => $bridge_status,
         'online' => $online,

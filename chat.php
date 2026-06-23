@@ -80,9 +80,9 @@ if ($newly_created) {
     $conversations = $DB->get_records('local_hermesagent_conversations', ['usermodified' => $USER->id], 'timemodified DESC');
 }
 
-// Get bridge status
+// Get bridge status (live check)
 $bridge_port = local_hermesagent_get_bridge_port();
-$bridge_status = local_hermesagent_get_setting('bridge_status', 'stopped');
+$bridge_status = local_hermesagent_check_bridge_status();
 
 // Conversation list
 echo html_writer::start_div('hermes-chat-container');

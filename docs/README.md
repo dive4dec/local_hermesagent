@@ -110,7 +110,7 @@ local/hermesagent/
 │   └── en/
 │       └── local_hermesagent.php     # Language strings
 ├── db/
-│   ├── tables.xml                    # XMLDB schema (5 tables)
+│   ├── install.xml                    # XMLDB schema (5 tables)
 │   ├── access.php                    # Capability definitions (4)
 │   ├── services.php                  # External web services (7)
 │   ├── install.php                   # Default settings on install
@@ -382,7 +382,7 @@ bracketed text.
 
 This section covers the database schema, external PHP functions, and the privacy provider.
 
-### Database Schema (db/tables.xml)
+### Database Schema (db/install.xml)
 
 The plugin defines **5 tables** via XMLDB:
 
@@ -604,7 +604,7 @@ most reliable approach.
 - [x] `README.txt` (plain text, no markdown)
 - [x] `LICENSE` (GPL v3+ header in all PHP files)
 - [x] `lang/en/local_hermesagent.php` with pluginname string
-- [x] `db/install.xml` or tables defined in `db/tables.xml`
+- [x] `db/install.xml` or tables defined in `db/install.xml`
 
 #### Privacy
 

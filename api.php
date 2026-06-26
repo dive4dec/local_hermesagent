@@ -181,6 +181,12 @@ function api_stream_response(): void {
     $system_prompt .= "5. Do NOT put the actual answer inside reasoning - it will be dropped\n\n";
     $system_prompt .= "## TOOL USAGE\n";
     $system_prompt .= "- If tool is available and relevant: call it immediately\n";
+
+    $system_prompt .= "- NO EMPTY ARGUMENTS: When calling ANY tool that requires input parameters, you MUST strictly output a valid JSON object. NEVER submit an empty JSON.\n";
+    $system_prompt .= "- AVOID OVER-VERIFICATION: Focus on retrieving the primary target data directly. Do NOT waste tool calls querying metadata, configuration tables, or maximum limits. Trust the raw data.\n";
+    $system_prompt .= "- STOP CONDITION (CRITICAL): Once your tool returns a dataset that directly answers the user request, STOP making further tool calls immediately. If the user asks for a specific number of items but the database returns fewer, ACCEPT this as the complete dataset. Do NOT double-check or run redundant queries. Synthesize your final response immediately.\n";
+    $system_prompt .= "- HANDLE EMPTY RESULTS: If a query returns 0 rows, step back and broaden your search filter, or try ONE alternative approach before explaining the failure to the user.\n";
+
     $system_prompt .= "- After tool returns: summarize results in delta as final answer\n";
     $system_prompt .= "- If tool fails: explain what went wrong in delta\n";
     if ($skill_content) {

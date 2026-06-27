@@ -120,41 +120,24 @@ else
 fi
 echo ""
 
-# Step 4: Persist hermes_proxy_forward.py if it's only in /tmp/
-mkdir -p "$HERMES_HOME/scripts"
-if [ -f /tmp/hermes_proxy_forward.py ] && [ ! -f "$HERMES_HOME/scripts/hermes_proxy_forward.py" ]; then
-    echo "[4/6] Persisting hermes_proxy_forward.py..."
-    cp /tmp/hermes_proxy_forward.py "$HERMES_HOME/scripts/hermes_proxy_forward.py"
-    chmod +x "$HERMES_HOME/scripts/hermes_proxy_forward.py"
-    echo "  ✅ Copied to $HERMES_HOME/scripts/"
-elif [ -f "$HERMES_HOME/scripts/hermes_proxy_forward.py" ]; then
-    echo "[4/6] hermes_proxy_forward.py already persistent"
+# Step 4: Install acp_bridge.py to the persistent location
+mkdir -p "$HERMES_HOME/classes/bridge"
+if [ -f /tmp/acp_bridge.py ] && [ ! -f "$HERMES_HOME/classes/bridge/acp_bridge.py" ]; then
+    echo "[4/5] Installing acp_bridge.py..."
+    cp /tmp/acp_bridge.py "$HERMES_HOME/classes/bridge/acp_bridge.py"
+elif [ -f "$HERMES_HOME/classes/bridge/acp_bridge.py" ]; then
+    echo "[4/5] acp_bridge.py already installed"
 else
-    echo "[4/6] hermes_proxy_forward.py not found anywhere"
+    echo "[4/5] acp_bridge.py not found - will be deployed with plugin files"
 fi
 echo ""
 
-# Step 5: Start Hermes ACP as www-data in tmux (not root!)
-echo "[5/6] Starting Hermes ACP as www-data in tmux..."
-if tmux has-session -t hermes-acp 2>/dev/null; then
-    echo "  hermes-acp tmux session already running"
-    # Check if it's actually running (not zombie)
-    if tmux capture-pane -t hermes-acp -p 2>/dev/null | grep -q "ACP client connected"; then
-        echo "  ✅ ACP is healthy"
-    else
-        echo "  ACP not healthy, restarting..."
-        tmux kill-session -t hermes-acp 2>/dev/null
-        sleep 1
-        tmux new-session -d -s hermes-acp -x 80 -y 24 "su -s /bin/sh -c \"HERMES_HOME=$HERMES_HOME $HERMES_HOME/venv/bin/hermes acp\" www-data"
-        echo "  ✅ Restarted"
-    fi
-else
-    tmux new-session -d -s hermes-acp -x 80 -y 24 "su -s /bin/sh -c \"HERMES_HOME=$HERMES_HOME $HERMES_HOME/venv/bin/hermes acp\" www-data"
-    echo "  ✅ Started as www-data"
-fi
+# Step 5: Note — the ACP bridge manages hermes acp as a subprocess.
+# No manual tmux session needed anymore.
+echo "[5/5] Note: ACP bridge manages hermes acp subprocess automatically"
 echo ""
 
-# Step 6: Verify
+# Verify
 echo "=== Verification ==="
 if "$HERMES_HOME/venv/bin/hermes" --version >/dev/null 2>&1; then
     echo "  hermes: OK"

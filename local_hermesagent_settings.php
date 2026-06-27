@@ -36,9 +36,8 @@ if ($action === 'start') {
     chmod($cred_file, 0600);
 
     $cmd = sprintf(
-        '${HERMES_HOME} BRIDGE_PORT=%d MOODLE_DB_CREDENTIALS_FILE=%s nohup %s/venv/bin/python %s > /var/www/moodledata/.hermes/logs/bridge.log 2>&1 & echo $!',
+        'HERMES_HOME=%s MOODLE_DB_CREDENTIALS_FILE=%s nohup %s/venv/bin/python %s >> /var/www/moodledata/.hermes/logs/bridge.log 2>&1 & echo $!',
         escapeshellarg($hermes_home),
-        $bridge_port,
         escapeshellarg($cred_file),
         $hermes_home,
         escapeshellarg($bridge_script)

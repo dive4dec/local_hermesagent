@@ -9,6 +9,7 @@ mkdir -p "$PID_DIR"
 
 PROXY_PID_FILE="$PID_DIR/hermes-proxy.pid"
 ACP_PID_FILE="$PID_DIR/hermes-acp.pid"
+BRIDGE_PID_FILE="$PID_DIR/acp-bridge.pid"
 
 pid_is_running() {
     [ -f "$1" ] || return 1
@@ -50,37 +51,19 @@ stop_by_pattern() {
     fi
 }
 
-start_proxy() {
-    if pid_is_running "$PROXY_PID_FILE"; then
-        cat "$PROXY_PID_FILE"
+start_bridge() {
+    if pid_is_running "$BRIDGE_PID_FILE"; then
+        cat "$BRIDGE_PID_FILE"
         return 0
     fi
-    HERMES_HOME="$HERMES_HOME" nohup "$HERMES_HOME/venv/bin/python" "$HERMES_HOME/venv/bin/hermes_proxy_forward.py" >/dev/null 2>&1 &
-    echo $! > "$PROXY_PID_FILE"
-    sleep 1
-    if pid_is_running "$PROXY_PID_FILE"; then
-        cat "$PROXY_PID_FILE"
+    HERMES_HOME="$HERMES_HOME" nohup "$HERMES_HOME/venv/bin/python" "$HERMES_HOME/classes/bridge/acp_bridge.py" >/dev/null 2>&1 &
+    echo $! > "$BRIDGE_PID_FILE"
+    sleep 2
+    if pid_is_running "$BRIDGE_PID_FILE"; then
+        cat "$BRIDGE_PID_FILE"
         return 0
     else
-        rm -f "$PROXY_PID_FILE"
-        echo "FAILED" >&2
-        return 1
-    fi
-}
-
-start_acp() {
-    if pid_is_running "$ACP_PID_FILE"; then
-        cat "$ACP_PID_FILE"
-        return 0
-    fi
-    HERMES_HOME="$HERMES_HOME" nohup "$HERMES_HOME/venv/bin/hermes" acp >/dev/null 2>&1 &
-    echo $! > "$ACP_PID_FILE"
-    sleep 1
-    if pid_is_running "$ACP_PID_FILE"; then
-        cat "$ACP_PID_FILE"
-        return 0
-    else
-        rm -f "$ACP_PID_FILE"
+        rm -f "$BRIDGE_PID_FILE"
         echo "FAILED" >&2
         return 1
     fi
@@ -88,11 +71,11 @@ start_acp() {
 
 do_stop() {
     # First try PID files
-    stop_by_pid "$PROXY_PID_FILE"
-    stop_by_pid "$ACP_PID_FILE"
+    stop_by_pid "$BRIDGE_PID_FILE"
 
     # Fallback: kill by command pattern (catches orphaned processes)
     stop_by_pattern "hermes_proxy_forward.py"
+    stop_by_pattern "acp_bridge.py"
     stop_by_pattern "hermes acp"
     stop_by_pattern "moodle_db_mcp.py"
 
@@ -102,16 +85,15 @@ do_stop() {
 do_start() {
     # Kill any stale processes first
     stop_by_pattern "hermes_proxy_forward.py"
+    stop_by_pattern "acp_bridge.py"
     stop_by_pattern "hermes acp"
     stop_by_pattern "moodle_db_mcp.py"
-    rm -f "$PROXY_PID_FILE" "$ACP_PID_FILE"
+    rm -f "$PROXY_PID_FILE" "$ACP_PID_FILE" "$BRIDGE_PID_FILE"
     sleep 1
 
-    proxy_pid=$(start_proxy)
-    proxy_ret=$?
-    acp_pid=$(start_acp)
-    acp_ret=$?
-    echo "proxy=$proxy_pid acp=$acp_pid proxy_ret=$proxy_ret acp_ret=$acp_ret"
+    bridge_pid=$(start_bridge)
+    bridge_ret=$?
+    echo "bridge=$bridge_pid ret=$bridge_ret"
 }
 
 do_restart() {

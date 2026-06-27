@@ -3,7 +3,7 @@ local_hermesagent - Hermes Agent integration for Moodle
 
 Plugin name   : Hermes Agent
 Component     : local_hermesagent
-Version       : 0.3.0 (2026061304)
+Version       : 0.3.7 (2026062701)
 Moodle req.   : 5.0+ (2024100700)
 License       : GNU GPL v3 or later
               : https://www.gnu.org/copyleft/gpl.html
@@ -110,11 +110,12 @@ Installation
 
   5. Bootstrap Hermes (first-time only):
 
-     Click "Bootstrap Hermes" in the settings page.  This downloads a
-     standalone Python 3.12 build (~50 MB), creates a virtual environment,
-     and installs the hermes-agent package.
+     Use the "Update & Bootstrap" button in the settings page.  This
+     downloads a standalone Python 3.12 build (~50 MB), creates a virtual
+     environment, and installs the hermes-agent package.
 
-  6. Start the ACP Bridge from the admin settings page (Start button).
+  6. The ACP Bridge auto-starts on the first chat message.  You can also
+     restart it manually via the "Restart ACP" button on the settings page.
 
 Prerequisites:
     - www-data can write to moodledata/.hermes/
@@ -226,6 +227,29 @@ Architecture overview
     v
   api.php  -->  acp_bridge.py (FastAPI)  -->  hermes acp  -->  LLM
 
+
+Change History
+--------------
+
+  0.3.7 (2026-06-27)
+    * fix: require lib.php in settings.php — resolves "undefined function"
+      error when using Restart ACP button
+    * fix: scope $req_id in api.php closure — resolves PHP fatal error
+      during streaming responses
+    * refactor: removed Start/Stop buttons from admin settings
+    * Added PHP lazy-start: api.php auto-starts bridge on first chat
+      message if bridge is down
+    * Deleted redundant local_hermesagent_settings.php
+
+  0.3.6 (2026-06-23)
+    * fix: replace proxy with ACP bridge architecture (acp_bridge.py)
+    * ACP runs in tmux session on pod, managed via lib.php PHP functions
+
+  0.3.5 (2026-06-23)
+    * fix: rename tables.xml to install.xml for Moodle XMLDB installer
+
+  0.3.0 (2026-06-13)
+    * Initial release with proxy-based architecture
 
 Known limitations
 -----------------

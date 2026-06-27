@@ -148,7 +148,13 @@ function api_stream_response(): void {
 
     $bridge_port = local_hermesagent_get_bridge_port();
     $bridge_url = "http://127.0.0.1:$bridge_port";
-    
+
+    // Lazy-start: if bridge isn't responding, start it now (transparent to user)
+    if (!local_hermesagent_ensure_bridge_running($bridge_port)) {
+        // Give it a moment to boot
+        sleep(2);
+    }
+
     // Get the last user message from conversation history
     $messages = $DB->get_records('local_hermesagent_messages', ['conversationid' => $conversationid], 'id ASC');
     $user_message = '';

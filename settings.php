@@ -30,10 +30,8 @@ if ($hassiteconfig) {
         require_sesskey();
 
         if ($target === 'gateway') {
-            // Write .env before starting/restarting gateway
-            if ($action !== 'stop') {
-                local_hermesagent_write_gateway_env();
-            }
+            // .env is already written directly by setting_configfile on Save.
+            // No need to call write_gateway_env() — file is the source of truth.
             $control_script = $CFG->dirroot . '/local/hermesagent/hermes-gateway-control.sh';
             $cmd = escapeshellarg($control_script) . ' ' . escapeshellarg($action) . ' 2>&1';
             exec($cmd, $output, $ret);
@@ -179,13 +177,16 @@ if ($hassiteconfig) {
 
     $settings->add(new admin_setting_description('local_hermesagent/gateway_status', '', $gw_html));
 
-    // Generic .env textarea — power users can paste any platform env vars here.
-    // The dashboard is the recommended way to configure platforms (it has a
-    // proper UI for each platform). This textarea is for direct .env editing.
-    $settings->add(new admin_setting_configtextarea('local_hermesagent/gateway_env',
+    // Gateway .env — read/write directly from file (single source of truth)
+    // Same pattern as config.yaml: the file IS the config, no DB copy.
+    // Both the Moodle textarea and the Dashboard edit the same file.
+    $settings->add(new \local_hermesagent\admin\setting_configfile(
+        'local_hermesagent/gateway_env',
         get_string('gateway_env', 'local_hermesagent'),
         get_string('gateway_env_desc', 'local_hermesagent'),
-        '', PARAM_RAW));
+        "$hermes_home/.env",
+        ''
+    ));
 
     // Terminal link
     $term_link = '<div class="hermes-terminal-link">';

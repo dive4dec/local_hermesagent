@@ -62,8 +62,8 @@ $string['rename'] = 'Rename';
 // Gateway
 $string['gateway'] = 'Messaging Gateway';
 $string['gateway_desc'] = 'Connect Hermes to messaging platforms (Matrix, Telegram, Discord, Signal, and more) so you can chat with the AI from Element, Telegram, or other apps. Use the Dashboard button for a guided setup UI, or paste env vars directly below.';
-$string['gateway_env'] = 'Gateway .env (advanced)';
-$string['gateway_env_desc'] = 'Paste platform environment variables here (one per line). These are written to $HERMES_HOME/.env when you click Start/Restart Gateway. Examples: MATRIX_HOMESERVER=https://matrix.org, TELEGRAM_BOT_TOKEN=123456:ABC, DISCORD_BOT_TOKEN=... The Dashboard provides a proper UI for each platform — recommended for most users.';
+$string['gateway_env'] = 'Gateway .env';
+$string['gateway_env_desc'] = 'Direct editor for the gateway environment file. Changes are written to $HERMES_HOME/.env when you click Save changes. Supports all platforms: MATRIX_*, TELEGRAM_*, DISCORD_*, etc. One var per line. The Dashboard also edits this same file — they stay in sync.';
 $string['gateway_not_configured'] = 'Not configured — click "Configure via Dashboard" or paste env vars below, then Start Gateway.';
 
 // Slash commands

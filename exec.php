@@ -91,7 +91,7 @@ $hermes_installed = is_dir($venv_bin);
 $env_prefix = '';
 if ($hermes_installed) {
     $env_prefix = "export HERMES_HOME='$hermes_home'\n";
-    $env_prefix .= "export PATH='$venv_bin:$PATH'\n";
+    $env_prefix .= "export PATH='$venv_bin:'\$PATH\n";
 }
 
 $cmd_id = md5(uniqid((string)getmypid(), true));

@@ -168,15 +168,19 @@ foreach ($header_lines as $line) {
 
 // Rewrite HTML responses: fix asset paths and set base path for the SPA
 if (strpos($path, '/api/') !== 0 && $http_code === 200) {
-    $proxy_base = $CFG->wwwroot . '/local/hermesagent/dashboard.php';
-    // Rewrite absolute asset paths to go through the proxy
-    $response_body = str_replace('src="/assets/', 'src="' . $proxy_base . '/assets/', $response_body);
-    $response_body = str_replace('href="/assets/', 'href="' . $proxy_base . '/assets/', $response_body);
-    $response_body = str_replace('href="/favicon.ico', 'href="' . $proxy_base . '/favicon.ico', $response_body);
+    // __HERMES_BASE_PATH__ must be a path (not full URL) — React Router's
+    // basename expects a path prefix, and the SPA uses it for API fetch calls.
+    // Extract the path component from wwwroot (e.g. "/edb") and append the proxy path.
+    $wwwroot_path = parse_url($CFG->wwwroot, PHP_URL_PATH) ?? '';
+    $proxy_base_path = rtrim($wwwroot_path, '/') . '/local/hermesagent/dashboard.php';
+    // Rewrite absolute asset paths to go through the proxy (relative to server root)
+    $response_body = str_replace('src="/assets/', 'src="' . $proxy_base_path . '/assets/', $response_body);
+    $response_body = str_replace('href="/assets/', 'href="' . $proxy_base_path . '/assets/', $response_body);
+    $response_body = str_replace('href="/favicon.ico', 'href="' . $proxy_base_path . '/favicon.ico', $response_body);
     // Set the SPA base path so API calls go through the proxy
     $response_body = str_replace(
         'window.__HERMES_BASE_PATH__=""',
-        'window.__HERMES_BASE_PATH__="' . $proxy_base . '"',
+        'window.__HERMES_BASE_PATH__="' . $proxy_base_path . '"',
         $response_body
     );
 }

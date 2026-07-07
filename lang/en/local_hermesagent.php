@@ -8,13 +8,15 @@ $string['pluginadministration'] = 'Hermes Agent administration';
 $string['terminal'] = 'Hermes Terminal';
 
 // Settings
+$string['quick_links'] = 'Quick Links';
+$string['acp_bridge'] = 'ACP Bridge';
+$string['hermes_config'] = 'Hermes Configuration';
 $string['settings_description'] = 'Configure the Hermes Agent bridge and provider settings.';
 $string['hermes_description'] = 'Path to the hermes CLI. Leave blank to search PATH.';
 $string['bridge_port'] = 'Bridge port';
 $string['bridge_port_desc'] = 'Local port for the ACP bridge HTTP service.';
 $string['config_yaml'] = 'Hermes config.yaml';
-$string['config_yaml_desc'] = 'Direct editor for the Hermes configuration file. Changes are written to $HERMES_HOME/config.yaml. This is the single source of truth — the same file the dashboard and CLI edit. Take care: invalid YAML will break Hermes. You can also use the Dashboard for a guided UI.';
-$string['bridge_status'] = 'Bridge status';
+$string['config_yaml_desc'] = 'Direct editor for $HERMES_HOME/config.yaml — the Hermes configuration file (model, provider, agent, toolsets, etc.). Changes are written on Save. This is the single source of truth: the dashboard and CLI edit the same file.';
 $string['hermes_model'] = 'Model override';
 $string['hermes_model_desc'] = 'Override the model used by Hermes. Leave blank to use your default profile.';
 $string['hermes_home'] = 'Hermes home directory';
@@ -61,10 +63,10 @@ $string['rename'] = 'Rename';
 
 // Gateway
 $string['gateway'] = 'Messaging Gateway';
-$string['gateway_desc'] = 'Connect Hermes to messaging platforms (Matrix, Telegram, Discord, Signal, and more) so you can chat with the AI from Element, Telegram, or other apps. Use the Dashboard button for a guided setup UI, or paste env vars directly below.';
+$string['gateway_desc'] = 'Connect Hermes to messaging platforms (Matrix, Telegram, Discord, Signal, and 15+ others) so you can chat with the AI from Element, Telegram, or other apps.';
 $string['gateway_env'] = 'Gateway .env';
-$string['gateway_env_desc'] = 'Direct editor for the gateway environment file. Changes are written to $HERMES_HOME/.env when you click Save changes. Supports all platforms: MATRIX_*, TELEGRAM_*, DISCORD_*, etc. One var per line. The Dashboard also edits this same file — they stay in sync.';
-$string['gateway_not_configured'] = 'No platform config found — paste env vars below or use the Dashboard, then click Start Gateway.';
+$string['gateway_env_desc'] = 'Direct editor for $HERMES_HOME/.env — platform environment variables (one per line). Supports MATRIX_*, TELEGRAM_*, DISCORD_*, SIGNAL_*, and more. Changes are written on Save. The Dashboard edits this same file — they stay in sync.';
+$string['gateway_not_configured'] = 'No platform config found — paste env vars below or use the Dashboard, then click Start.';
 
 // Slash commands
 $string['slash_help'] = 'Slash commands: /stop (abort response), /new (new conversation), /clear (clear view), /status (bridge health), /help (this message)';

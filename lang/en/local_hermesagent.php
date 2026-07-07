@@ -57,6 +57,21 @@ $string['privacy:messages'] = 'Messages';
 $string['backto'] = 'Back to settings';
 $string['rename'] = 'Rename';
 
+// Gateway
+$string['gateway'] = 'Messaging Gateway';
+$string['gateway_desc'] = 'Connect Hermes to messaging platforms (Matrix, Telegram, etc.) so you can chat with the AI from Element, Telegram, or other messaging apps.';
+$string['gateway_matrix_homeserver'] = 'Matrix homeserver URL';
+$string['gateway_matrix_homeserver_desc'] = 'e.g. https://matrix.org';
+$string['gateway_matrix_user_id'] = 'Matrix user ID';
+$string['gateway_matrix_user_id_desc'] = 'Bot account, e.g. @hermes-bot:matrix.org';
+$string['gateway_matrix_access_token'] = 'Matrix access token';
+$string['gateway_matrix_access_token_desc'] = 'Get this from Element: Settings → Help & About → Access Token. Keep secret.';
+$string['gateway_matrix_allowed_rooms'] = 'Allowed room IDs';
+$string['gateway_matrix_allowed_rooms_desc'] = 'Comma-separated Matrix room IDs the bot responds in (e.g. !abc123:matrix.org). Leave blank to allow all DMs.';
+$string['gateway_matrix_device_id'] = 'Matrix device ID';
+$string['gateway_matrix_device_id_desc'] = 'Optional. Stable device ID for E2EE persistence across restarts.';
+$string['gateway_not_configured'] = 'Not configured — enter Matrix settings below, then click Start Gateway.';
+
 // Slash commands
 $string['slash_help'] = 'Slash commands: /stop (abort response), /new (new conversation), /clear (clear view), /status (bridge health), /help (this message)';
 $string['slash_stopped'] = 'Response stopped.';

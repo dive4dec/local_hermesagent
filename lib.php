@@ -166,6 +166,74 @@ function local_hermesagent_restart_bridge(int $bridge_port): bool {
 }
 
 /**
+ * Write the Matrix gateway config to $HERMES_HOME/.env so the gateway
+ * process picks it up on start. Called when settings are saved.
+ */
+function local_hermesagent_write_gateway_env(): void {
+    $hermes_home = getenv('HERMES_HOME') ?: '/var/www/moodledata/.hermes';
+    $env_file = "$hermes_home/.env";
+
+    $homeserver = get_config('local_hermesagent', 'matrix_homeserver');
+    $user_id    = get_config('local_hermesagent', 'matrix_user_id');
+    $token      = get_config('local_hermesagent', 'matrix_access_token');
+    $rooms      = get_config('local_hermesagent', 'matrix_allowed_rooms');
+    $device_id  = get_config('local_hermesagent', 'matrix_device_id');
+
+    // Read existing .env, remove old MATRIX_ lines
+    $existing = [];
+    if (file_exists($env_file)) {
+        $lines = file($env_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            if (strpos($line, 'MATRIX_') !== 0) {
+                $existing[] = $line;
+            }
+        }
+    }
+
+    // Append new MATRIX_ lines
+    if ($homeserver) {
+        $existing[] = "MATRIX_HOMESERVER=$homeserver";
+    }
+    if ($user_id) {
+        $existing[] = "MATRIX_USER_ID=$user_id";
+    }
+    if ($token) {
+        $existing[] = "MATRIX_ACCESS_TOKEN=$token";
+    }
+    if ($rooms) {
+        $existing[] = "MATRIX_ALLOWED_ROOMS=$rooms";
+    }
+    if ($device_id) {
+        $existing[] = "MATRIX_DEVICE_ID=$device_id";
+    }
+
+    file_put_contents($env_file, implode("\n", $existing) . "\n");
+    @chmod($env_file, 0600);
+}
+
+/**
+ * Check if gateway is running (PID file + process alive).
+ */
+function local_hermesagent_is_gateway_running(): bool {
+    $hermes_home = getenv('HERMES_HOME') ?: '/var/www/moodledata/.hermes';
+    $pidfile = "$hermes_home/pids/gateway.pid";
+    if (!file_exists($pidfile)) {
+        return false;
+    }
+    $pid = trim(file_get_contents($pidfile));
+    return $pid && posix_kill(intval($pid), 0);
+}
+
+/**
+ * Check if Matrix gateway config is present.
+ */
+function local_hermesagent_is_gateway_configured(): bool {
+    $homeserver = get_config('local_hermesagent', 'matrix_homeserver');
+    $token      = get_config('local_hermesagent', 'matrix_access_token');
+    return !empty($homeserver) && !empty($token);
+}
+
+/**
  * Register admin navigation — only visible to users with capability
  */
 function local_hermesagent_extend_navigation_navigation(settings_navigation $nav, context_system $context) {

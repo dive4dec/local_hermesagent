@@ -5,6 +5,31 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.3.10] — 2026-07-07
+
+### Added
+
+#### Messaging Gateway (Matrix/Element)
+- **`hermes-gateway-control.sh`** — process manager for the Hermes gateway
+  (start/stop/restart/status via nohup + PID file). The gateway connects
+  Hermes to messaging platforms so you can chat with the AI from Element,
+  Telegram, or other messaging apps.
+- **Matrix config fields** on the settings page:
+  - Homeserver URL (e.g. `https://matrix.org`)
+  - User ID (bot account, e.g. `@hermes-bot:matrix.org`)
+  - Access token (password-type field, from Element settings)
+  - Allowed room IDs (comma-separated whitelist)
+  - Device ID (optional, for E2EE persistence)
+- **Gateway status panel** with Start/Stop/Restart buttons and last log
+  line display. Buttons only appear when Matrix config is present.
+- **`local_hermesagent_write_gateway_env()`** — writes Matrix config to
+  `$HERMES_HOME/.env` (with 0600 permissions) before gateway start.
+  Removes old `MATRIX_` lines on each write to avoid duplicates.
+- **`local_hermesagent_is_gateway_running()`** / **`is_gateway_configured()`**
+  helper functions in `lib.php`.
+
+---
+
 ## [0.3.9] — 2026-07-07
 
 ### Fixed

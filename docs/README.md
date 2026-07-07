@@ -1,6 +1,6 @@
 # local_hermesagent — Developer Documentation
 
-**Version:** 0.3.9 (2026070702) | **Moodle:** 5.0+ | **License:** GPL v3+
+**Version:** 0.3.10 (2026070703) | **Moodle:** 5.0+ | **License:** GPL v3+
 
 ---
 

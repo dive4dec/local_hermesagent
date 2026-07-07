@@ -57,16 +57,23 @@ if ($hassiteconfig) {
     }
 
     // ================================================================
-    // Section 1: Quick Links
+    // Section 1: Tools
     // ================================================================
-    $links_html = '<div class="hermes-quick-links" style="margin-bottom: 20px;">';
-    $links_html .= '<a href="' . $CFG->wwwroot . '/local/hermesagent/chat.php?action=new" class="btn btn-primary" target="_blank"><i class="icon fa fa-comments"></i> Chat</a> ';
-    $links_html .= '<a href="' . $CFG->wwwroot . '/local/hermesagent/terminal.php" class="btn btn-secondary"><i class="icon fa fa-terminal"></i> Terminal</a> ';
-    $links_html .= '<a href="' . $CFG->wwwroot . '/local/hermesagent/dashboard.php/" target="_blank" class="btn btn-info"><i class="icon fa fa-tachometer"></i> Dashboard</a> ';
-    $links_html .= '<a href="' . $CFG->wwwroot . '/local/hermesagent/settings_action.php?action=update&sesskey=' . sesskey() . '" class="btn btn-warning"><i class="icon fa fa-download"></i> Update &amp; Bootstrap</a> ';
-    $links_html .= '<a href="' . $hermes_docs . '" target="_blank" class="btn btn-link"><i class="icon fa fa-book"></i> Docs</a>';
+    $links_html = '<div class="hermes-tools" style="margin-bottom: 20px;">';
+    $links_html .= '<table class="generaltable">';
+    $links_html .= '<tr><td style="width:120px;"><a href="' . $CFG->wwwroot . '/local/hermesagent/chat.php?action=new" class="btn btn-primary" target="_blank"><i class="icon fa fa-comments"></i> Chat</a></td>';
+    $links_html .= '<td>Chat with the Hermes AI agent in real time. Supports markdown, LaTeX math rendering, and tool approval prompts. Conversations are saved in Moodle.</td></tr>';
+    $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/terminal.php" class="btn btn-secondary"><i class="icon fa fa-terminal"></i> Terminal</a></td>';
+    $links_html .= '<td>Run non-interactive Hermes CLI commands from the browser (e.g. <code>hermes config</code>, <code>hermes mcp list</code>, <code>hermes update --yes</code>). Interactive TUI commands are not supported.</td></tr>';
+    $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/dashboard.php/" target="_blank" class="btn btn-info"><i class="icon fa fa-tachometer"></i> Dashboard</a></td>';
+    $links_html .= '<td>Full Hermes web UI — configure model/provider, browse sessions, manage MCP servers and toolsets, and set up messaging platforms. Opens in a new tab.</td></tr>';
+    $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/settings_action.php?action=update&sesskey=' . sesskey() . '" class="btn btn-warning"><i class="icon fa fa-download"></i> Update &amp; Bootstrap</a></td>';
+    $links_html .= '<td>Install or update the Hermes Python environment, bridge scripts, and MCP servers. Safe to run repeatedly (idempotent). Also repairs the installation if something is broken.</td></tr>';
+    $links_html .= '<tr><td><a href="' . $hermes_docs . '" target="_blank" class="btn btn-link"><i class="icon fa fa-book"></i> Docs</a></td>';
+    $links_html .= '<td>Official Hermes Agent documentation — configuration reference, gateway setup guides, and API docs.</td></tr>';
+    $links_html .= '</table>';
     $links_html .= '</div>';
-    $settings->add(new admin_setting_heading('hermesagent_links', get_string('quick_links', 'local_hermesagent'), $links_html));
+    $settings->add(new admin_setting_heading('hermesagent_links', get_string('tools', 'local_hermesagent'), $links_html));
 
     // ================================================================
     // Section 2: ACP Bridge

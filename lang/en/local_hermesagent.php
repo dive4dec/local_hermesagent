@@ -8,7 +8,7 @@ $string['pluginadministration'] = 'Hermes Agent administration';
 $string['terminal'] = 'Hermes Terminal';
 
 // Settings
-$string['quick_links'] = 'Quick Links';
+$string['tools'] = 'Tools';
 $string['acp_bridge'] = 'ACP Bridge';
 $string['hermes_config'] = 'Hermes Configuration';
 $string['settings_description'] = 'Configure the Hermes Agent bridge and provider settings.';

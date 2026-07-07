@@ -122,13 +122,12 @@ if ($hassiteconfig) {
     $settings->add(new admin_setting_configtext('local_hermesagent/bridge_port',
         get_string('bridge_port', 'local_hermesagent'),
         get_string('bridge_port_desc', 'local_hermesagent'),
-        $bridge_port, PARAM_INT));
+        '9118', PARAM_INT));
 
-    $dashboard_port = get_config('local_hermesagent', 'dashboard_port') ?: '9119';
     $settings->add(new admin_setting_configtext('local_hermesagent/dashboard_port',
         get_string('dashboard_port', 'local_hermesagent'),
         get_string('dashboard_port_desc', 'local_hermesagent'),
-        $dashboard_port, PARAM_INT));
+        '9119', PARAM_INT));
 
     // ================================================================
     // Section 3: Hermes Configuration (config.yaml)

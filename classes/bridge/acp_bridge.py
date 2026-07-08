@@ -538,8 +538,22 @@ async def session_prompt(request: Request):
         acp_session_id = acp._sessions[conversationid]
         log.info("Reusing ACP session %s for conversation %s", acp_session_id, conversationid)
 
-    # Build prompt text — include system prompt as first message
+    # Build prompt text with conversation history and system prompt.
+    # The ACP session maintains history internally, but has a context window
+    # limit that truncates older messages. By including the full history from
+    # Moodle DB, the agent always has access to all prior messages.
     if system_prompt and messages:
+        # Build a full context with system prompt + conversation history
+        history_text = ""
+        for m in messages:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role == "user":
+                history_text += f"User: {content}\n\n"
+            elif role == "assistant":
+                history_text += f"Assistant: {content}\n\n"
+        full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[/SYSTEM]\n\n[CONVERSATION HISTORY]\n{history_text}[/CONVERSATION HISTORY]\n\n{prompt_text}"
+    elif system_prompt:
         full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[/SYSTEM]\n\n{prompt_text}"
     else:
         full_prompt = prompt_text

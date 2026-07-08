@@ -571,45 +571,31 @@ if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_sys
             throw new \moodle_exception('imagetoolarge');
         }
 
-        // Save to Moodle's file API
-        $context = \context_system::instance();
-        $fs = get_file_storage();
-        $itemid = time();
-        $filename = 'pasted_' . $itemid . '.' . $ext;
+        // Save to local filesystem so Hermes can read it directly
+        $hermes_home = getenv('HERMES_HOME') ?: '/var/www/moodledata/.hermes';
+        $img_dir = $hermes_home . '/images';
+        if (!is_dir($img_dir)) {
+            @mkdir($img_dir, 0775, true);
+        }
+        $filename = 'pasted_' . time() . '.' . $ext;
+        $filepath = $img_dir . '/' . $filename;
+        file_put_contents($filepath, $blob);
+        @chmod($filepath, 0644);
+        @chown($filepath, 'www-data');
+        @chgrp($filepath, 'www-data');
 
-        // Delete any previous file with same name/itemid (shouldn't happen)
-        $fs->delete_area_files($context->id, 'local_hermesagent', 'chatimage', $itemid);
+        // Build a URL for browser display via image.php (no auth complexity)
+        $url = (new \moodle_url('/local/hermesagent/image.php', ['f' => $filename]))->out(false);
+        // Local path for Hermes to read directly
+        $local_path = $filepath;
 
-        $filerecord = (object)[
-            'contextid' => $context->id,
-            'component' => 'local_hermesagent',
-            'filearea' => 'chatimage',
-            'itemid' => $itemid,
-            'filepath' => '/',
-            'filename' => $filename,
-            'userid' => $USER->id,
-            'timecreated' => $itemid,
-            'timemodified' => $itemid,
-        ];
-
-        $storedfile = $fs->create_file_from_string($filerecord, $blob);
-
-        // Build a pluginfile URL
-        $url = \moodle_url::make_pluginfile_url(
-            $context->id,
-            'local_hermesagent',
-            'chatimage',
-            $itemid,
-            '/',
-            $filename
-        );
-
-        return ['url' => $url->out(false), 'itemid' => $itemid];
+        return ['url' => $url, 'local_path' => $local_path, 'itemid' => time()];
     }
 
     public static function upload_image_returns() {
         return new external_single_structure([
-            'url' => new external_value(PARAM_URL, 'Image URL'),
+            'url' => new external_value(PARAM_URL, 'Image URL for browser display'),
+            'local_path' => new external_value(PARAM_RAW, 'Local filesystem path for Hermes to read'),
             'itemid' => new external_value(PARAM_INT, 'File item ID'),
         ]);
     }

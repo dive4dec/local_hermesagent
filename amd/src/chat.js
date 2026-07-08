@@ -388,7 +388,10 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
                             args: { image: dataUri, conversationid: config.conversationid }
                         }])[0].then(function(res) {
                             var input = $('#hermes-message-input');
-                            var md = '![](' + res.url + ')';
+                            // Use local_path in the markdown so Hermes can read the file directly.
+                            // The browser renders this as a broken img link, so we also store the
+                            // display URL in a data attribute for the renderMarkdown step.
+                            var md = '![image](' + res.local_path + ')';
                             var currentVal = input.val();
                             input.val(currentVal + (currentVal ? '\n' : '') + md);
                             input.focus();
@@ -1029,6 +1032,11 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         text = text.trim().replace(/\r\n/g, '\n');
         // Strip dangerous tags
         text = text.replace(/<\s*\/?(script|iframe|object|embed|form|link|meta|base)[^>]*>/gi, '');
+        // Rewrite local file paths in image markdown to image.php URLs for browser display
+        text = text.replace(/!\[([^\]]*)\]\((\/var\/www\/moodledata\/\.hermes\/images\/[^)]+)\)/g, function(match, alt, path) {
+            var filename = path.split('/').pop();
+            return '![' + alt + '](' + M.cfg.wwwroot + '/local/hermesagent/image.php?f=' + encodeURIComponent(filename) + ')';
+        });
         text = protectMathDelimiters(text);
         return loadMarked().then(function(m) {
             return unescapeMathDelimiters(m.parse(text));

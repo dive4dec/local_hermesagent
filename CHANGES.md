@@ -5,18 +5,62 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [0.3.11] — 2026-07-07
+## [0.3.11] — 2026-07-08
 
 ### Added
 
-#### Hermes config.yaml direct editor
+#### Messaging Gateway (multi-platform)
+- **`hermes-gateway-control.sh`** — process manager for the Hermes gateway
+  (start/stop/restart/status via nohup + PID file). Connects Hermes to
+  messaging platforms so you can chat with the AI from Element, Telegram,
+  Discord, Signal, and 15+ other apps.
+- **Gateway `.env` direct editor** on the settings page — paste any
+  platform's environment variables (one per line). Supports all Hermes
+  gateway platforms: Matrix, Telegram, Discord, Signal, Mattermost, IRC,
+  Email, Line, Feishu, DingTalk, Google Chat, QQ, ntfy, BlueBubbles, etc.
+- **Gateway status panel** with Start/Stop/Restart buttons and last log
+  line display. Detects any platform config by checking for known env var
+  prefixes in the `.env` file.
 - **`classes/admin/setting_configfile.php`** — custom `admin_setting` class
   that reads/writes a file directly (not the Moodle DB). The file is the
   single source of truth — no stale DB copy. Edits via Moodle, the
-  dashboard, or the CLI all modify the same file.
-- **config.yaml textarea** on the settings page — edit the full Hermes
-  configuration (model, provider, agent settings, toolsets, etc.) directly.
-  Changes are written to `$HERMES_HOME/config.yaml` on save.
+  dashboard, or the CLI all modify the same file. Used by both config.yaml
+  and gateway `.env`.
+- **Hermes config.yaml direct editor** on the settings page — edit the
+  full Hermes configuration (model, provider, agent settings, toolsets,
+  etc.) directly. Changes are written to `$HERMES_HOME/config.yaml` on save.
+- **Configurable dashboard port** — new `dashboard_port` setting (default
+  9119), read by `dashboard.php` when starting the dashboard.
+- **`local_hermesagent_is_gateway_running()`** /
+  **`is_gateway_configured()`** helper functions in `lib.php`.
+- **Documentation links** — 📖 Configuration docs under config.yaml,
+  📖 Gateway docs under `.env`.
+
+### Changed
+
+#### Settings page redesign
+- **Four clear sections** with proper headings: Tools, ACP Bridge, Hermes
+  Configuration, Messaging Gateway.
+- **"Tools" section** (renamed from "Quick Links") — each tool now has a
+  description: Chat, Terminal, Dashboard, Update & Bootstrap, Docs. Laid
+  out as a table with button + description.
+- **Shorter button labels** — "Chat" (was "Open Hermes Chat"), "Terminal"
+  (was "Open Terminal"), "Restart"/"Stop"/"Start" (dropped "ACP"/"Gateway"
+  suffixes since context is clear from section heading).
+- **No duplicate buttons** — Dashboard only in Tools (removed from gateway
+  section), Update & Bootstrap moved to Tools (removed from bridge section).
+- **Port fields use static defaults** — `'9118'` and `'9119'` passed
+  directly to constructors instead of reading stale DB values.
+
+### Fixed
+
+- **`admin_setting_configpassword` not found** — Moodle doesn't have this
+  class; replaced with `admin_setting_configpasswordunmask` (then later
+  removed entirely when Matrix-specific fields were replaced with the
+  generic `.env` textarea).
+- **Stale `bridge_port = 0`** — empty field was cast to `0` by `PARAM_INT`
+  and stored in DB, shown instead of the default `9118`. Fixed by using
+  static defaults and clearing the DB value.
 
 ---
 
@@ -24,27 +68,16 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-#### Messaging Gateway (multi-platform)
-- **`hermes-gateway-control.sh`** — process manager for the Hermes gateway
-  (start/stop/restart/status via nohup + PID file). The gateway connects
-  Hermes to messaging platforms so you can chat with the AI from Element,
-  Telegram, Discord, Signal, and 15+ other apps.
-- **Generic `.env` textarea** on the settings page — paste any platform's
-  environment variables (one per line). Supports all Hermes gateway
-  platforms: Matrix, Telegram, Discord, Signal, Mattermost, IRC, Email,
-  Line, Feishu, DingTalk, Google Chat, QQ, ntfy, BlueBubbles, and more.
-  Written to `$HERMES_HOME/.env` (0600) on Start/Restart.
-- **"Configure via Dashboard" button** — opens the Hermes web dashboard
-  which has a guided setup UI for each messaging platform. This is the
-  recommended way to configure platforms.
-- **Gateway status panel** with Start/Stop/Restart buttons and last log
-  line display. Detects any platform config (not just Matrix) by checking
-  for known env var prefixes in both Moodle settings and `.env`.
-- **`local_hermesagent_write_gateway_env()`** — merges textarea content
-  with existing `.env` (preserves non-platform lines), replaces old
-  platform lines on each write to avoid duplicates.
-- **`local_hermesagent_is_gateway_running()`** / **`is_gateway_configured()`**
-  helper functions in `lib.php`.
+#### Messaging Gateway (initial Matrix-only)
+- Initial Matrix-specific gateway support with 5 config fields (homeserver,
+  user ID, access token, allowed rooms, device ID).
+
+### Changed
+
+- Replaced Matrix-specific fields with generic `.env` textarea supporting
+  all 15+ Hermes gateway platforms.
+- Gateway `.env` changed from DB-stored textarea to direct file editor
+  (`setting_configfile`), keeping it in sync with Dashboard edits.
 
 ---
 

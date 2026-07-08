@@ -296,14 +296,24 @@
   align-self: flex-end;
   min-width: 80px;
   border-radius: 8px;
-  background: #4f46e5;
   border: none;
+  transition: background 0.2s, opacity 0.2s;
 }
-.hermes-input-container .btn-primary:hover {
-  background: #6366f1;
+/* Bridge running — green */
+.hermes-input-container .hermes-send-ready {
+  background: #16a34a;
+}
+.hermes-input-container .hermes-send-ready:hover {
+  background: #15803d;
+}
+/* Bridge down — gray, disabled */
+.hermes-input-container .hermes-send-disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 .hermes-input-container .btn-primary:disabled {
-  opacity: 0.6;
+  opacity: 0.7;
 }
 
 /* Tool modal */

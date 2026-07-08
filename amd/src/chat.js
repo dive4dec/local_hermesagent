@@ -55,12 +55,17 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     // ---------------------------------------------------------------------------
 
     var setupEventListeners = function() {
+        // Set initial send button state based on bridge status from server
+        updateSendButton(config.bridge_status === 'running');
+
         $('#hermes-send-btn').on('click', sendMessage);
 
         $('#hermes-message-input').on('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                sendMessage();
+                if (!$('#hermes-send-btn').prop('disabled')) {
+                    sendMessage();
+                }
             }
         });
 
@@ -1299,6 +1304,45 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             $msg.find('.hermes-system-content').text('Bridge: unreachable');
         });
     };
+
+    /**
+     * Update send button state based on bridge status.
+     * Green + enabled when running, gray + disabled when not.
+     */
+    var updateSendButton = function(bridgeRunning) {
+        var $btn = $('#hermes-send-btn');
+        if (bridgeRunning) {
+            $btn.prop('disabled', false)
+                .removeClass('hermes-send-disabled')
+                .addClass('hermes-send-ready');
+        } else {
+            $btn.prop('disabled', true)
+                .removeClass('hermes-send-ready')
+                .addClass('hermes-send-disabled');
+        }
+    };
+
+    /**
+     * Periodically check bridge health and update the send button.
+     */
+    var pollBridgeStatus = function() {
+        $.ajax({
+            url: config.api_url + '?action=status&conversationid=' + config.conversationid,
+            type: 'GET',
+            timeout: 3000,
+            dataType: 'json'
+        }).done(function(res) {
+            updateSendButton(res.status === 'ok' || res.status === 'running');
+        }).fail(function() {
+            updateSendButton(false);
+        });
+    };
+
+    // Check bridge status on load and every 30 seconds
+    if (config.bridge_status !== 'running') {
+        pollBridgeStatus();
+    }
+    setInterval(pollBridgeStatus, 30000);
 
     // ---------------------------------------------------------------------------
     // Public API

@@ -34,7 +34,7 @@ $PAGE->set_url(new moodle_url('/local/hermesagent/chat.php', [
 $PAGE->set_context(context_system::instance());
 $PAGE->set_title(get_string('pluginname', 'local_hermesagent'));
 $PAGE->set_heading(get_string('pluginname', 'local_hermesagent'));
-$PAGE->requires->css(new moodle_url('/local/hermesagent/styles/chat.css', ['v' => '20260708f']));
+$PAGE->requires->css(new moodle_url('/local/hermesagent/styles/chat.css', ['v' => '20260708g']));
 // Load the chat AMD module (proper Moodle way)
 $PAGE->requires->js_call_amd('local_hermesagent/chat', 'init');
 
@@ -177,11 +177,6 @@ foreach ($conversations as $conv) {
 echo html_writer::end_div('hermes-conversation-list');
 
 echo html_writer::start_div('hermes-sidebar-footer');
-// Bridge status indicator
-$status_cls = $bridge_status == 'running' ? 'text-success' : 'text-danger';
-echo html_writer::tag('div', get_string('bridge_status', 'local_hermesagent') . ': <strong class="' . $status_cls . '">' . $bridge_status . '</strong>', [
-    'class' => 'mt-2 hermes-bridge-status',
-]);
 echo html_writer::end_div('hermes-sidebar-footer');
 echo html_writer::end_div('hermes-sidebar');
 
@@ -247,6 +242,7 @@ echo html_writer::start_div('hermes-config', [
         'userid' => $USER->id,
         'token' => sesskey(),
         'bridge_port' => $bridge_port,
+        'bridge_status' => $bridge_status,
         'sesskey' => sesskey(),
         'api_url' => $api_url,
     ]),

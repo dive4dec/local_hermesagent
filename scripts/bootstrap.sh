@@ -119,10 +119,14 @@ hint = ('IMPORTANT: This is a Moodle plugin environment running as www-data insi
         '/var/www/moodledata/.hermes/.env (these are the single source of truth). '
         'The venv is at /var/www/moodledata/.hermes/venv/bin/hermes.')
 cfg['agent']['environment_hint'] = hint
+# Set approval timeout to 600s (10 min) — allows time for browser-based approval
+cfg.setdefault('approvals', {})
+cfg['approvals']['timeout'] = 600
 with open(path, 'w') as f:
     yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, width=200)
 print('  environment_hint: set')
-" CONFIG_FILE="$CONFIG_FILE" 2>&1
+print('  approvals.timeout: 600')
+" CONFIG_FILE=\"$CONFIG_FILE\" 2>&1
 
 # Add moodle_db MCP server config if not present
 if grep -q "moodle_db:" "$CONFIG_FILE" 2>/dev/null; then

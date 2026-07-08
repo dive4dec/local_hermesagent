@@ -47,13 +47,13 @@ stop_by_pattern() {
     if [ -n "$pids" ]; then
         for pid in $pids; do
             [ "$pid" = "$$" ] && continue
-            kill "$pid" 2>/dev/null
+            kill "$pid" 2>/dev/null || echo "WARNING: cannot kill pid $pid (not owned by us)" >&2
         done
         sleep 1
         pids=$(pgrep -f "$pattern" 2>/dev/null)
         for pid in $pids; do
             [ "$pid" = "$$" ] && continue
-            kill -9 "$pid" 2>/dev/null
+            kill -9 "$pid" 2>/dev/null || echo "WARNING: cannot force-kill pid $pid" >&2
         done
     fi
 }

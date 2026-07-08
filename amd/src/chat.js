@@ -10,6 +10,7 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
     console.log('[Hermes-JS] module loaded');
     var config = {};
     var currentMessage = null;
+    var currentPermissionId = null;
     var isStreaming = false;
 
     /**
@@ -59,6 +60,11 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
             }
         });
 
+        // Sidebar toggle for mobile
+        $('.hermes-sidebar-header').on('click', function() {
+            $('.hermes-sidebar').toggleClass('hermes-sidebar-open');
+        });
+
         // Conversation list clicks
         $(document).on('click', '.hermes-conv-item', function(e) {
             // Don't navigate if clicking the rename button
@@ -77,10 +83,10 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
 
         // Tool modal actions
         $('#hermes-tool-approve').on('click', function() {
-            handleToolResponse(true);
+            handlePermissionResponse(true);
         });
         $('#hermes-tool-reject').on('click', function() {
-            handleToolResponse(false);
+            handlePermissionResponse(false);
         });
 
         // Rename conversation
@@ -330,6 +336,13 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
             addToolCallToChat(data.tool_call);
         });
 
+        // Handle permission request — show approval modal
+        eventSource.addEventListener('permission', function(e) {
+            console.log('[Hermes-SSE] permission event received');
+            var data = JSON.parse(e.data);
+            showPermissionModal(data);
+        });
+
         eventSource.addEventListener('error', function(e) {
             console.error('[Hermes-SSE] Error:', e);
             console.error('[Hermes-SSE] EventSource readyState:', eventSource.readyState);
@@ -471,6 +484,58 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
             md += '| ' + cells.join(' | ') + ' |\n';
         }
         return md;
+    };
+
+    /**
+     * Show permission modal for tool approval
+     */
+    var showPermissionModal = function(permData) {
+        var permId = permData.permission_id;
+        var title = permData.title || 'Tool execution requested';
+        var desc = permData.description || '';
+        var kind = permData.kind || 'execute';
+
+        var html = '<div class="hermes-perm-header">';
+        html += '<span class="hermes-perm-icon">&#9881;</span>';
+        html += '<h4>' + escapeHtml(title) + '</h4>';
+        html += '</div>';
+        if (desc) {
+            html += '<pre class="hermes-perm-desc">' + escapeHtml(desc) + '</pre>';
+        }
+        html += '<p class="hermes-perm-prompt">Do you want to approve this action?</p>';
+
+        $('#hermes-tool-modal-body').html(html);
+        $('#hermes-tool-modal').show();
+
+        // Store permission_id for the approve/reject handlers
+        currentPermissionId = permId;
+    };
+
+    /**
+     * Handle permission response (approve/reject)
+     */
+    var handlePermissionResponse = function(approved) {
+        if (currentPermissionId === null) return;
+
+        $.ajax({
+            url: config.api_url + '?action=permission_response',
+            type: 'POST',
+            data: {
+                sesskey: config.sesskey,
+                permission_id: currentPermissionId,
+                approved: approved ? 1 : 0
+            },
+            success: function() {
+                $('#hermes-tool-modal').hide();
+                currentPermissionId = null;
+                scrollToEnd();
+            },
+            error: function(ex) {
+                console.error('[Hermes] handlePermissionResponse failed:', ex);
+                $('#hermes-tool-modal').hide();
+                currentPermissionId = null;
+            }
+        });
     };
 
     /**

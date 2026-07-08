@@ -74,6 +74,9 @@ switch ($action) {
     case 'tool_response':
         api_tool_response();
         break;
+    case 'permission_response':
+        api_permission_response();
+        break;
     case 'abort':
         api_abort_stream();
         break;
@@ -265,6 +268,19 @@ function api_stream_response(): void {
                         flush();
                     }
                     
+                    // Handle permission events — forward to browser
+                    if ($etype === 'permission') {
+                        $perm_data = [
+                            'type' => 'permission',
+                            'permission_id' => $json['permission_id'] ?? null,
+                            'title' => $json['title'] ?? 'Unknown tool',
+                            'description' => $json['description'] ?? '',
+                            'kind' => $json['kind'] ?? 'execute',
+                        ];
+                        echo "event: permission\ndata: " . json_encode($perm_data) . "\n\n";
+                        flush();
+                    }
+
                     // Handle done event
                     if ($etype === 'done') {
                         _hermes_log("[$req_id] DONE - assistant=" . strlen($assistant_content) . " reasoning=" . strlen($reasoning_content));
@@ -393,12 +409,44 @@ function api_list_conversations(): void {
 function api_tool_response(): void {
     $messageid = required_param('messageid', PARAM_INT);
     $approved = required_param('approved', PARAM_BOOL);
-    
+
     send_json_response([
         'status' => 'ok',
         'messageid' => $messageid,
         'approved' => $approved,
     ]);
+}
+
+/**
+ * Forward permission response (approve/reject) to the ACP bridge
+ */
+function api_permission_response(): void {
+    $permission_id = required_param('permission_id', PARAM_INT);
+    $approved = required_param('approved', PARAM_BOOL);
+
+    $bridge_port = local_hermesagent_get_bridge_port();
+    $bridge_url = "http://127.0.0.1:$bridge_port/session/permission";
+
+    $ch = curl_init($bridge_url);
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode([
+            'permission_id' => $permission_id,
+            'approved' => $approved,
+        ]),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+    ]);
+    $resp = curl_exec($ch);
+    $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($http !== 200) {
+        send_json_response(['status' => 'error', 'message' => 'Bridge error']);
+    }
+
+    send_json_response(['status' => 'ok', 'approved' => $approved]);
 }
 
 /**

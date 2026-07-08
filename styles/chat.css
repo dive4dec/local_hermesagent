@@ -272,6 +272,39 @@
   justify-content: flex-end;
 }
 
+/* Permission modal */
+.hermes-perm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.hermes-perm-header h4 {
+  margin: 0;
+  font-size: 16px;
+}
+.hermes-perm-icon {
+  font-size: 20px;
+}
+.hermes-perm-desc {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13px;
+  margin: 8px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.hermes-perm-prompt {
+  margin-top: 12px;
+  font-weight: 500;
+  color: #475569;
+}
+
 /* Spinner */
 .hermes-spinner {
   display: inline-block;
@@ -329,19 +362,144 @@
   display: inline-block;
 }
 
-/* Responsive */
+/* Responsive — mobile phones */
 @media (max-width: 768px) {
   .hermes-chat-container {
     flex-direction: column;
-    height: calc(100vh - 150px);
+    height: calc(100vh - 140px);
+    min-height: 400px;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
   }
+
+  /* Sidebar collapses to a thin strip with a toggle */
   .hermes-sidebar {
     width: 100%;
-    min-width: 100%;
-    max-height: 150px;
+    min-width: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.2s ease;
+    border-right: none;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  .hermes-sidebar.hermes-sidebar-open {
+    max-height: 200px;
+  }
+  .hermes-sidebar-header {
+    padding: 10px 12px;
+    cursor: pointer;
+  }
+  .hermes-sidebar-header h3 {
+    font-size: 13px;
+    margin: 0;
+  }
+  .hermes-sidebar-header hr {
+    display: none;
+  }
+
+  /* Conversation list */
+  .hermes-conversation-list {
+    padding: 4px;
+  }
+  .hermes-conv-item {
+    font-size: 12px;
+    padding: 8px 10px;
+  }
+  .hermes-conv-rename {
+    display: none !important;
+  }
+  .hermes-sidebar-footer {
+    padding: 8px 10px;
+  }
+  .hermes-sidebar-footer .btn-secondary {
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+  .hermes-bridge-status {
+    font-size: 10px;
+    margin-top: 4px;
+  }
+
+  /* Chat area */
+  .hermes-chat-area {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  /* Messages — full width on mobile */
+  .hermes-message {
+    max-width: 90%;
+  }
+  .hermes-avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+  .hermes-bubble {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  /* Input area — compact */
+  .hermes-input-area {
+    padding: 8px;
+  }
+  .hermes-input-container {
+    gap: 6px;
+  }
+  .hermes-input-container textarea {
+    min-height: 40px;
+    font-size: 16px; /* prevents iOS zoom */
+    padding: 8px 12px;
+  }
+  .hermes-input-container .btn-primary {
+    min-width: 60px;
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+
+  /* Tool modal — full width on mobile */
+  .hermes-tool-modal-content {
+    width: 94%;
+    padding: 16px;
+    border-radius: 8px;
+  }
+  .hermes-tool-modal-actions {
+    gap: 8px;
+  }
+  .hermes-tool-modal-actions .btn {
+    font-size: 14px;
+    padding: 8px 16px;
+  }
+  .hermes-perm-desc {
+    font-size: 12px;
+    max-height: 200px;
+  }
+
+  /* Tool call sections */
+  .hermes-tool-summary {
+    font-size: 0.8em;
+  }
+  .hermes-tool-input code, .hermes-tool-result pre {
+    font-size: 0.8em;
+  }
+}
+
+/* Responsive — foldable phones (unfolded/wide) */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .hermes-chat-container {
+    height: calc(100vh - 160px);
+  }
+  .hermes-sidebar {
+    width: 200px;
+    min-width: 200px;
   }
   .hermes-message {
-    max-width: 95%;
+    max-width: 85%;
+  }
+  .hermes-input-container {
+    max-width: 100%;
   }
 }
 

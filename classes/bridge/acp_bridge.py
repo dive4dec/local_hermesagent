@@ -235,18 +235,10 @@ class ACPProcess:
                 log.debug("agent_thought_chunk: %s", text[:200])
             return True
 
-        # session/request_permission - auto-approve for trusted Moodle environment
+        # session/request_permission - forward to browser for approval (via SSE)
         if method == "session/request_permission" and msg_id is not None:
-            log.info("Auto-approving permission request %s", msg_id)
-            response = {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {"status": "accepted"},
-            }
-            self.proc.stdin.write(json.dumps(response) + "\n")
-            self.proc.stdin.flush()
-            log.info("Sent approval for permission %s", msg_id)
-            return True
+            log.info("Permission request %s will be forwarded via SSE", msg_id)
+            return True  # Don't auto-approve; the streaming loop handles it
 
         # fs/* and terminal/* requests from ACP - respond with error if not handled
         if msg_id is not None and method and ("/" in method):
@@ -359,17 +351,38 @@ class ACPProcess:
                     }
                 continue
 
-            # Handle session/request_permission - auto-approve
+            # Handle session/request_permission - forward to browser for approval
             if method == "session/request_permission" and msg_id is not None:
-                log.info("Auto-approving permission request %s", msg_id)
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {"status": "accepted"},
+                params = msg.get("params", {})
+                options = params.get("options", [])
+                # Extract tool call info from the params
+                call_info = params.get("call", {})
+                call_title = call_info.get("title", "Unknown tool")
+                call_kind = call_info.get("kind", "execute")
+                content = call_info.get("content", [])
+
+                # Build a readable description of what the tool wants to do
+                desc_parts = []
+                for item in content:
+                    if isinstance(item, dict):
+                        item_type = item.get("type", "")
+                        item_content = item.get("content", {})
+                        if isinstance(item_content, dict):
+                            desc_parts.append(item_content.get("text", ""))
+                        elif isinstance(item_content, str):
+                            desc_parts.append(item_content)
+
+                log.info("Forwarding permission request %s to browser: %s", msg_id, call_title)
+
+                # Yield a permission event to the browser
+                yield {
+                    "type": "permission",
+                    "permission_id": msg_id,
+                    "title": call_title,
+                    "kind": call_kind,
+                    "description": "\n".join(desc_parts),
+                    "options": options,
                 }
-                self.proc.stdin.write(json.dumps(response) + "\n")
-                self.proc.stdin.flush()
-                log.info("Sent approval for permission %s", msg_id)
                 continue
 
             # Handle fs/* and terminal/* requests
@@ -556,6 +569,23 @@ async def session_prompt(request: Request):
                     }
                     yield f"data: {json.dumps(data)}\n\n"
 
+                elif event_type == "permission":
+                    # Forward permission request to browser for approval
+                    perm_id = event.get("permission_id")
+                    title = event.get("title", "Unknown tool")
+                    desc = event.get("description", "")
+                    kind = event.get("kind", "execute")
+                    log.info("Forwarding permission request %s: %s", perm_id, title)
+                    data = {
+                        "type": "permission",
+                        "permission_id": perm_id,
+                        "title": title,
+                        "description": desc,
+                        "kind": kind,
+                        "session_id": acp_session_id,
+                    }
+                    yield f"event: permission\ndata: {json.dumps(data)}\n\n"
+
                 elif event_type == "done":
                     # Content and reasoning were already streamed via session/update chunks.
                     # Just signal completion — do NOT re-send content.
@@ -613,6 +643,34 @@ async def session_prompt(request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/session/permission")
+async def session_permission(request: Request):
+    """Respond to a permission request — approve or reject."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    permission_id = body.get("permission_id")
+    approved = body.get("approved", False)
+
+    if permission_id is None:
+        return {"status": "error", "message": "permission_id required"}
+
+    if not acp.proc or acp.proc.poll() is not None:
+        return {"status": "error", "message": "ACP process not running"}
+
+    response = {
+        "jsonrpc": "2.0",
+        "id": permission_id,
+        "result": {"status": "accepted" if approved else "rejected"},
+    }
+    acp.proc.stdin.write(json.dumps(response) + "\n")
+    acp.proc.stdin.flush()
+    log.info("Permission %s %s by user", permission_id, "approved" if approved else "rejected")
+    return {"status": "ok", "approved": approved}
 
 
 @app.get("/sessions")

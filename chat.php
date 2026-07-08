@@ -116,6 +116,18 @@ echo html_writer::tag('button', '✕', [
 echo html_writer::end_div();
 
 echo html_writer::empty_tag('hr');
+
+// Search box
+echo html_writer::start_div('hermes-search-container');
+echo html_writer::empty_tag('input', [
+    'type' => 'text',
+    'id' => 'hermes-conv-search',
+    'class' => 'hermes-search-input form-control',
+    'placeholder' => 'Search conversations…',
+    'autocomplete' => 'off',
+]);
+echo html_writer::end_div();
+
 echo html_writer::end_div('hermes-sidebar-header');
 
 echo html_writer::start_div('hermes-conversation-list');
@@ -123,8 +135,8 @@ foreach ($conversations as $conv) {
     $cls = $conv->id == $current_id ? ' active' : '';
     echo html_writer::start_div('hermes-conv-item' . $cls, [
         'data-conv-id' => $conv->id,
+        'data-conv-name' => strtolower($conv->name),
         'class' => 'hermes-conv-item' . $cls,
-        'title' => userdate($conv->timemodified),
     ]);
     echo html_writer::empty_tag('input', [
         'type' => 'checkbox',
@@ -135,6 +147,10 @@ foreach ($conversations as $conv) {
     echo html_writer::tag('span', format_text($conv->name, FORMAT_PLAIN), [
         'class' => 'hermes-conv-name',
         'data-conv-id' => $conv->id,
+    ]);
+    // Timestamp
+    echo html_writer::tag('span', userdate($conv->timemodified, '%b %d, %H:%M'), [
+        'class' => 'hermes-conv-time',
     ]);
     echo html_writer::tag('button', '✎', [
         'class' => 'hermes-conv-rename',

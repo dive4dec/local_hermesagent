@@ -132,14 +132,40 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             });
         });
 
-        // --- Bulk selection mode ---
+        // --- Conversation search ---
+        $('#hermes-conv-search').on('input', function() {
+            var query = $(this).val().toLowerCase().trim();
+            $('.hermes-conv-item').each(function() {
+                var name = $(this).data('conv-name') || '';
+                if (!query || name.indexOf(query) !== -1) {
+                    $(this).show();
+                } else {
+                    $(this).hide();
+                }
+            });
+            // Show a "no results" message if nothing matches
+            if (query && $('.hermes-conv-item:visible').length === 0) {
+                if (!$('#hermes-search-empty').length) {
+                    $('.hermes-conversation-list').append(
+                        '<div id="hermes-search-empty" class="hermes-search-empty">No conversations found</div>'
+                    );
+                }
+            } else {
+                $('#hermes-search-empty').remove();
+            }
+        });
+
+        // --- Bulk selection mode with shift-click range selection ---
 
         // Long-press or right-click on a conv item enters bulk mode
         var pressTimer;
+        var lastCheckedItem = null; // For shift-click range selection
+
         $('.hermes-conversation-list').on('contextmenu', '.hermes-conv-item', function(e) {
             e.preventDefault();
             enterBulkMode();
             $(this).find('.hermes-conv-checkbox').prop('checked', true);
+            lastCheckedItem = this;
             updateBulkBar();
         });
 
@@ -149,7 +175,10 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             pressTimer = setTimeout(function() {
                 enterBulkMode();
                 $item.find('.hermes-conv-checkbox').prop('checked', true);
+                lastCheckedItem = $item[0];
                 updateBulkBar();
+                // Trigger haptic feedback if available
+                if (navigator.vibrate) navigator.vibrate(50);
             }, 600);
         });
         $('.hermes-conversation-list').on('touchend touchmove', '.hermes-conv-item', function() {
@@ -165,6 +194,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             $('.hermes-conv-checkbox').hide().prop('checked', false);
             $('.hermes-conv-item').removeClass('hermes-bulk-mode');
             $('.hermes-bulk-actions').hide();
+            lastCheckedItem = null;
         }
 
         // Checkbox toggle
@@ -173,14 +203,41 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             updateBulkBar();
         });
 
-        // In bulk mode, clicking an item toggles its checkbox
+        // In bulk mode, clicking an item toggles its checkbox (with shift-click range select)
         $(document).on('click', '.hermes-conv-item.hermes-bulk-mode', function(e) {
             if ($(e.target).closest('.hermes-conv-rename, .hermes-conv-duplicate').length) return;
             e.stopPropagation();
-            var $cb = $(this).find('.hermes-conv-checkbox');
-            $cb.prop('checked', !$cb.prop('checked'));
+
+            var $items = $('.hermes-conv-item.hermes-bulk-mode:visible');
+            var $current = $(this);
+
+            if (e.shiftKey && lastCheckedItem) {
+                // Range select from lastCheckedItem to this item
+                var fromIdx = $items.index(lastCheckedItem);
+                var toIdx = $items.index(this);
+                if (fromIdx === -1 || toIdx === -1) {
+                    // Fallback: just toggle this item
+                    toggleItem($current);
+                } else {
+                    var start = Math.min(fromIdx, toIdx);
+                    var end = Math.max(fromIdx, toIdx);
+                    // Check all items in range
+                    $items.slice(start, end + 1).each(function() {
+                        $(this).find('.hermes-conv-checkbox').prop('checked', true);
+                    });
+                }
+            } else {
+                toggleItem($current);
+            }
+
+            lastCheckedItem = this;
             updateBulkBar();
         });
+
+        function toggleItem($item) {
+            var $cb = $item.find('.hermes-conv-checkbox');
+            $cb.prop('checked', !$cb.prop('checked'));
+        }
 
         function updateBulkBar() {
             var checked = $('.hermes-conv-checkbox:checked');
@@ -821,10 +878,12 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         msgCounter++;
         var contentId = 'hermes-user-content-' + msgCounter;
         var actionsHtml = buildMessageActions(content, 'user', msgId);
+        var timeHtml = buildTimestamp(null);
         $('#hermes-chat-area').append(
             '<div class="hermes-message hermes-user-message">' +
             '<div class="hermes-avatar hermes-user-avatar">U</div>' +
             '<div class="hermes-bubble hermes-user-bubble">' +
+            timeHtml +
             '<div class="hermes-content" id="' + contentId + '"></div>' +
             actionsHtml +
             '</div></div>'
@@ -837,11 +896,13 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         msgCounter++;
         var contentId = 'hermes-assistant-content-' + msgCounter;
         var spinnerId = 'hermes-spinner-' + msgCounter;
+        var timeHtml = buildTimestamp(null);
 
         $('#hermes-chat-area').append(
             '<div class="hermes-message hermes-assistant-message" id="hermes-assistant-msg-' + msgCounter + '">' +
             '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
             '<div class="hermes-bubble hermes-assistant-bubble">' +
+            timeHtml +
             '<div class="hermes-content hermes-streaming" id="' + contentId + '"></div>' +
             '<div class="hermes-spinner" id="' + spinnerId + '"></div>' +
             '</div></div>'
@@ -860,6 +921,26 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         $('#hermes-chat-area').append($el);
         scrollToEnd();
         return $el;
+    };
+
+    /**
+     * Build a timestamp element for a message.
+     * @param {number|null} ts - Unix timestamp (seconds), or null for now
+     * @returns {string} HTML for the timestamp
+     */
+    var buildTimestamp = function(ts) {
+        var now = new Date();
+        var date = ts ? new Date(ts * 1000) : now;
+        var h = String(date.getHours()).padStart(2, '0');
+        var m = String(date.getMinutes()).padStart(2, '0');
+        var label = h + ':' + m;
+        // Show date if not today
+        var today = new Date();
+        if (date.toDateString() !== today.toDateString()) {
+            var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            label = months[date.getMonth()] + ' ' + date.getDate() + ', ' + label;
+        }
+        return '<div class="hermes-msg-time">' + escapeHtml(label) + '</div>';
     };
 
     /**
@@ -891,10 +972,12 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             if (msg.role === 'user') {
                 var userContentId = 'hermes-hist-user-' + i;
                 var userActions = buildMessageActions(content, 'user', msg.id);
+                var userTime = buildTimestamp(msg.timemodified);
                 chatArea.append(
                     '<div class="hermes-message hermes-user-message">' +
                     '<div class="hermes-avatar hermes-user-avatar">U</div>' +
                     '<div class="hermes-bubble hermes-user-bubble">' +
+                    userTime +
                     '<div class="hermes-content" id="' + userContentId + '"></div>' +
                     userActions +
                     '</div></div>'
@@ -911,10 +994,12 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             } else if (msg.role === 'assistant') {
                 var assistantContentId = 'hermes-hist-asst-' + i;
                 var asstActions = buildMessageActions(content, 'assistant', msg.id);
+                var asstTime = buildTimestamp(msg.timemodified);
                 chatArea.append(
                     '<div class="hermes-message hermes-assistant-message">' +
                     '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
                     '<div class="hermes-bubble hermes-assistant-bubble">' +
+                    asstTime +
                     '<div class="hermes-content" id="' + assistantContentId + '"></div>' +
                     asstActions +
                     '</div></div>'

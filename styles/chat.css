@@ -572,6 +572,67 @@
   margin: 4px 0;
 }
 
+/* Message timestamps */
+.hermes-msg-time {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.hermes-user-bubble .hermes-msg-time {
+  color: rgba(255,255,255,0.6);
+}
+
+/* Conversation search box */
+.hermes-search-container {
+  padding: 4px 0;
+}
+.hermes-search-input {
+  width: 100%;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+.hermes-search-input:focus {
+  border-color: #4f46e5;
+  background: white;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(79,70,229,0.1);
+}
+.hermes-search-empty {
+  padding: 16px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+/* Conversation list item layout (name + time on same row) */
+.hermes-conv-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.hermes-conv-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hermes-conv-time {
+  font-size: 10px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.hermes-conv-item.active .hermes-conv-time {
+  color: rgba(255,255,255,0.7);
+}
+
 /* Quote preview bar above input */
 .hermes-quote-preview {
   display: flex;

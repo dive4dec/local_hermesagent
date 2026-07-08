@@ -89,12 +89,19 @@ echo html_writer::start_div('hermes-chat-container');
 
 echo html_writer::start_div('hermes-sidebar');
 echo html_writer::start_div('hermes-sidebar-header');
+echo html_writer::start_div('hermes-sidebar-title-row');
 echo html_writer::tag('h3', get_string('conversations', 'local_hermesagent'));
+echo html_writer::tag('button', '+', [
+    'id' => 'hermes-new-conv',
+    'class' => 'hermes-new-conv-btn',
+    'title' => get_string('newconversation', 'local_hermesagent'),
+]);
 echo html_writer::tag('button', '◀', [
     'id' => 'hermes-sidebar-collapse',
     'class' => 'hermes-sidebar-collapse-btn',
     'title' => 'Collapse sidebar',
 ]);
+echo html_writer::end_div('hermes-sidebar-title-row');
 
 // Bulk action toolbar (hidden until a checkbox is checked)
 echo html_writer::start_div('hermes-bulk-actions', ['style' => 'display:none;']);
@@ -175,11 +182,6 @@ foreach ($conversations as $conv) {
 echo html_writer::end_div('hermes-conversation-list');
 
 echo html_writer::start_div('hermes-sidebar-footer');
-echo html_writer::link(
-    new moodle_url('/local/hermesagent/chat.php', ['action' => 'new']),
-    get_string('newconversation', 'local_hermesagent'),
-    ['class' => 'btn btn-secondary hermes-new-conv']
-);
 // Bridge status indicator
 $status_cls = $bridge_status == 'running' ? 'text-success' : 'text-danger';
 echo html_writer::tag('div', get_string('bridge_status', 'local_hermesagent') . ': <strong class="' . $status_cls . '">' . $bridge_status . '</strong>', [

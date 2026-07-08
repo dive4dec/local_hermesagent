@@ -91,7 +91,7 @@
   position: relative;
 }
 .hermes-sidebar-header h3 {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 14px;
   font-weight: 600;
   color: #cdd6f4;
@@ -99,6 +99,7 @@
 .hermes-sidebar-header hr {
   border: none;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: 12px;
 }
 
 .hermes-conversation-list {
@@ -587,11 +588,13 @@
 .hermes-sidebar-title-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 .hermes-sidebar-title-row h3 {
   flex: 1;
   margin: 0;
+  min-width: 0;
 }
 .hermes-new-conv-btn {
   background: none;

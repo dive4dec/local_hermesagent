@@ -86,13 +86,11 @@ else
 fi
 echo ""
 
-# Step 4: Configure Hermes config.yaml with MCP server
-echo "[4/5] Configuring MCP servers..."
+# Step 4: Configure Hermes config.yaml with MCP server and environment hint
+echo "[4/5] Configuring MCP servers and environment hint..."
 CONFIG_FILE="$HERMES_HOME/config.yaml"
 if [ ! -f "$CONFIG_FILE" ]; then
-    # Generate a default config by running hermes once
     "$HERMES_HOME/venv/bin/hermes" config check >/dev/null 2>&1 || true
-    # If still no config, create a minimal one
     if [ ! -f "$CONFIG_FILE" ]; then
         cat > "$CONFIG_FILE" << 'YAMLEOF'
 model:
@@ -102,6 +100,29 @@ YAMLEOF
         echo "  Created minimal config.yaml"
     fi
 fi
+
+# Set environment_hint so Hermes knows to use control scripts, not foreground processes
+"$HERMES_HOME/venv/bin/python" -c "
+import yaml, os
+path = os.environ.get('CONFIG_FILE')
+with open(path) as f:
+    cfg = yaml.safe_load(f) or {}
+if 'agent' not in cfg:
+    cfg['agent'] = {}
+hint = ('IMPORTANT: This is a Moodle plugin environment running as www-data inside a Kubernetes pod (phpfpm-0). '
+        'The Hermes gateway and ACP bridge run as background daemons managed by shell scripts. '
+        'NEVER run \"hermes gateway run\" or \"hermes acp\" directly in the foreground — they block forever '
+        'and will be killed by the terminal timeout. Instead use the control scripts: '
+        '/var/www/html/public/local/hermesagent/hermes-gateway-control.sh {start|stop|restart|status} for the gateway, '
+        'and /var/www/html/public/local/hermesagent/hermes-bridge-control.sh {start|stop|restart|status} for the ACP bridge. '
+        'To edit config files, write directly to /var/www/moodledata/.hermes/config.yaml and '
+        '/var/www/moodledata/.hermes/.env (these are the single source of truth). '
+        'The venv is at /var/www/moodledata/.hermes/venv/bin/hermes.')
+cfg['agent']['environment_hint'] = hint
+with open(path, 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, width=200)
+print('  environment_hint: set')
+" CONFIG_FILE="$CONFIG_FILE" 2>&1
 
 # Add moodle_db MCP server config if not present
 if grep -q "moodle_db:" "$CONFIG_FILE" 2>/dev/null; then

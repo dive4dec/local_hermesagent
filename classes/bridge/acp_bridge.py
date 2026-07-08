@@ -271,6 +271,25 @@ class ACPProcess:
         log.info("Created ACP session: %s", session_id)
         return session_id
 
+    def load_session(self, session_id, cwd=None):
+        """Load an existing ACP session by ID. Returns result or None if not found."""
+        # NOTE: session/load often fails because hermes acp can't recreate the
+        # agent for old sessions ("Failed to recreate agent"). We keep this method
+        # for future use but currently don't rely on it.
+        if cwd is None:
+            cwd = "/var/www/html"
+        try:
+            result, _, _ = self._request("session/load", {
+                "cwd": cwd,
+                "sessionId": session_id,
+                "mcpServers": [],
+            }, timeout=30)
+            log.info("Loaded ACP session: %s", session_id)
+            return result
+        except RuntimeError as e:
+            log.warning("session/load failed for %s: %s", session_id, e)
+            return None
+
     def send_prompt_streaming(self, session_id, prompt_text, timeout=None, abort_event=None):
         """Send a prompt and yield SSE events as they arrive from the agent.
 
@@ -526,20 +545,42 @@ async def session_prompt(request: Request):
     prompt_text = body.get("message", "")
     system_prompt = body.get("system_prompt", "")
     messages = body.get("messages", [])
+    stored_acp_session_id = body.get("acp_session_id", "")
 
     log.info("=== New prompt: conversationid=%s, prompt_len=%d ===", conversationid, len(prompt_text))
 
     # Get or create ACP session for this conversation
+    is_new_session = False
     if conversationid not in acp._sessions:
+        # No in-memory mapping — bridge was restarted or this is a new conversation.
+        # Always create a fresh ACP session. We don't use session/load because
+        # hermes acp often can't recreate the agent for old sessions.
+        # Instead, if there's conversation history, it will be included in the
+        # first prompt so the agent has context.
         acp_session_id = acp.create_session()
         acp._sessions[conversationid] = acp_session_id
-        log.info("Created new ACP session %s for conversation %s", acp_session_id, conversationid)
+        is_new_session = True
+        log.info("Created new ACP session %s for conversation %s (is_new=%s)",
+                 acp_session_id, conversationid, is_new_session)
     else:
         acp_session_id = acp._sessions[conversationid]
         log.info("Reusing ACP session %s for conversation %s", acp_session_id, conversationid)
 
-    # Build prompt text — include system prompt as first message
-    if system_prompt:
+    # Build prompt text — include system prompt.
+    # On new sessions (bridge restart or first message), include conversation
+    # history so the agent has context. On subsequent prompts, the ACP session
+    # maintains history internally with automatic compaction.
+    if system_prompt and is_new_session and messages:
+        history_text = ""
+        for m in messages:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role == "user":
+                history_text += f"User: {content}\n\n"
+            elif role == "assistant":
+                history_text += f"Assistant: {content}\n\n"
+        full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[/SYSTEM]\n\n[CONVERSATION HISTORY]\n{history_text}[/CONVERSATION HISTORY]\n\n{prompt_text}"
+    elif system_prompt:
         full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[/SYSTEM]\n\n{prompt_text}"
     else:
         full_prompt = prompt_text

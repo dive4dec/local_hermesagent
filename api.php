@@ -167,35 +167,47 @@ function api_stream_response(): void {
         die();
     }
 
-    // Get the last user message from conversation history
+    // Get conversation history from DB
     $messages = $DB->get_records('local_hermesagent_messages', ['conversationid' => $conversationid], 'id ASC');
     $user_message = '';
+    $history = [];
     foreach ($messages as $msg) {
         if ($msg->role === 'user') {
             $user_message = $msg->content;
         }
+        // Skip empty assistant messages (created during streaming but not yet saved)
+        if (trim($msg->content) !== '') {
+            $history[] = [
+                'role' => $msg->role,
+                'content' => $msg->content,
+            ];
+        }
     }
-    
+
     // Get loaded skills and build system prompt
     $skills = local_hermesagent_get_skills(null, true);
     $skill_content = '';
     foreach ($skills as $skill) {
         $skill_content .= "## {$skill->name}\n{$skill->description}\n\n{$skill->content}\n\n";
     }
-    
+
     $system_prompt = "You are a helpful assistant with access to Moodle database tools.\n\n";
     if ($skill_content) {
         $system_prompt .= "## Available Skills\n" . $skill_content;
     }
-    
+
     // Build request to ACP bridge
     // The ACP session maintains conversation history internally with automatic
     // compaction (archive_and_compact) — old messages are summarized, not lost.
-    // Sending full history every time would duplicate tokens and waste context.
+    // We send the full history only for the bridge to use when creating a NEW
+    // session (after bridge restart). On subsequent prompts, the bridge only
+    // sends the latest message, relying on the ACP session's internal memory.
     $request = [
         'conversationid' => $conversationid,
         'message' => $user_message,
         'system_prompt' => $system_prompt,
+        'acp_session_id' => $conv->acp_session_id ?? null,
+        'messages' => $history,
     ];
     
     // CRITICAL: Release session and flush buffers BEFORE any output
@@ -233,6 +245,7 @@ function api_stream_response(): void {
             static $assistant_content = '';
             static $reasoning_content = '';
             static $message_id = null;
+            static $acp_session_saved = false;
             
             // Parse SSE data — new bridge format matches what we expect
             $lines = explode("\n", $data);
@@ -246,6 +259,15 @@ function api_stream_response(): void {
                     $payload = substr($line, 6);
                     $json = json_decode($payload, true);
                     if (!$json) continue;
+                    
+                    // Save the ACP session ID to DB on first chunk (once per stream)
+                    if (!$acp_session_saved && !empty($json['session_id'])) {
+                        $acp_session_saved = true;
+                        $upd = new stdClass();
+                        $upd->id = $conversationid;
+                        $upd->acp_session_id = $json['session_id'];
+                        $DB->update_record('local_hermesagent_conversations', $upd);
+                    }
                     
                     $dl = strlen($json['delta'] ?? '');
                     $rl = strlen($json['reasoning'] ?? '');

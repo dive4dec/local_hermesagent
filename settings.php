@@ -24,7 +24,7 @@ if ($hassiteconfig) {
             exec($cmd, $output, $ret);
             $verb = ($action === 'stop') ? 'stopped' : (($action === 'restart') ? 'restarted' : 'started');
             $message = 'Gateway ' . $verb . ' — ' . implode(' ', $output);
-            redirect(new moodle_url('/admin/settings.php', ['section' => 'local_hermesagent_settings']), $message);
+            redirect(new moodle_url('/admin/settings.php', ['section' => 'local_hermesagent_settings', 't' => time()]), $message);
         } else {
             $control_script = $CFG->dirroot . '/local/hermesagent/hermes-bridge-control.sh';
             $cmd = escapeshellarg($control_script) . ' ' . escapeshellarg($action) . ' 2>&1';
@@ -32,7 +32,17 @@ if ($hassiteconfig) {
 
             $bridge_port = get_config('local_hermesagent', 'bridge_port') ?: '9118';
             if ($action === 'stop') {
-                $message = 'ACP Bridge stopped';
+                // Verify the bridge actually stopped
+                $ch = curl_init("http://127.0.0.1:$bridge_port/health");
+                curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 2]);
+                $resp = curl_exec($ch);
+                $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+                if ($resp !== false && $http === 200) {
+                    $message = 'ACP Bridge may not have stopped — check that it is running as www-data, not root';
+                } else {
+                    $message = 'ACP Bridge stopped';
+                }
             } else {
                 $healthy = false;
                 for ($i = 0; $i < 20; $i++) {
@@ -52,7 +62,7 @@ if ($hassiteconfig) {
                     ? 'ACP Bridge ' . $verb . ' (ready after ' . ($i + 1) . 's)'
                     : 'Bridge ' . $verb . ' but not responding after 20s. Check bridge.log.';
             }
-            redirect(new moodle_url('/admin/settings.php', ['section' => 'local_hermesagent_settings']), $message);
+            redirect(new moodle_url('/admin/settings.php', ['section' => 'local_hermesagent_settings', 't' => time()]), $message);
         }
     }
 
@@ -102,7 +112,7 @@ if ($hassiteconfig) {
 
     $bridge_html = '<div class="hermes-status-panel">';
     $bridge_html .= '<table class="generaltable">';
-    $bridge_html .= '<tr><td style="width:150px;">ACP Bridge</td><td>' . ($is_running ? '<span class="text-success">Running</span>' : '<span class="text-warning">Stopped — will auto-start on first chat</span>') . ' (port ' . $bridge_port . ')</td></tr>';
+    $bridge_html .= '<tr><td style="width:150px;">ACP Bridge</td><td>' . ($is_running ? '<span class="text-success">Running</span>' : '<span class="text-warning">Stopped</span>') . ' (port ' . $bridge_port . ')</td></tr>';
     $bridge_html .= '<tr><td>Hermes</td><td>' . htmlspecialchars($hermes_version) . '</td></tr>';
     if ($health_data && isset($health_data['sessions'])) {
         $bridge_html .= '<tr><td>Active Sessions</td><td>' . $health_data['sessions'] . '</td></tr>';

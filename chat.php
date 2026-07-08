@@ -177,11 +177,6 @@ foreach ($conversations as $conv) {
 echo html_writer::end_div('hermes-conversation-list');
 
 echo html_writer::start_div('hermes-sidebar-footer');
-// Bridge status indicator
-$status_cls = $bridge_status == 'running' ? 'text-success' : 'text-danger';
-echo html_writer::tag('div', get_string('bridge_status', 'local_hermesagent') . ': <strong class="' . $status_cls . '">' . $bridge_status . '</strong>', [
-    'class' => 'mt-2 hermes-bridge-status',
-]);
 echo html_writer::end_div('hermes-sidebar-footer');
 echo html_writer::end_div('hermes-sidebar');
 

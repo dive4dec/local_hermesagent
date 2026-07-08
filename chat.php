@@ -163,12 +163,11 @@ echo html_writer::tag('div', get_string('bridge_status', 'local_hermesagent') . 
     'class' => 'mt-2 hermes-bridge-status',
 ]);
 echo html_writer::end_div('hermes-sidebar-footer');
+echo html_writer::end_div('hermes-sidebar');
 
-// Resize handle between sidebar and chat area
+// Resize handle between sidebar and chat area (sibling of sidebar, not child)
 echo html_writer::start_div('hermes-sidebar-resizer', ['id' => 'hermes-sidebar-resizer']);
 echo html_writer::end_div('hermes-sidebar-resizer');
-
-echo html_writer::end_div('hermes-sidebar');
 
 // Expand button (visible when sidebar is collapsed)
 echo html_writer::tag('button', '▶', [

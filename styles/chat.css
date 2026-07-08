@@ -72,16 +72,17 @@
 
 /* Resize handle */
 .hermes-sidebar-resizer {
-  width: 5px;
+  width: 6px;
   cursor: col-resize;
-  background: transparent;
+  background: #e2e8f0;
   flex-shrink: 0;
   position: relative;
   z-index: 10;
+  transition: background 0.15s;
 }
 .hermes-sidebar-resizer:hover,
 .hermes-sidebar-resizer.hermes-resizing {
-  background: rgba(79, 70, 229, 0.4);
+  background: #4f46e5;
 }
 
 .hermes-sidebar-header {
@@ -518,14 +519,16 @@
   .hermes-sidebar {
     width: 100%;
     min-width: 0;
-    max-height: 0;
+    max-height: 42px;
     overflow: hidden;
     transition: max-height 0.2s ease;
     border-right: none;
     border-bottom: 1px solid rgba(255,255,255,0.1);
+    flex-shrink: 0;
   }
   .hermes-sidebar.hermes-sidebar-open {
-    max-height: 220px;
+    max-height: 280px;
+    overflow-y: auto;
   }
   .hermes-sidebar-header {
     padding: 10px 12px;
@@ -533,6 +536,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    position: relative;
   }
   .hermes-sidebar-header h3 {
     font-size: 13px;

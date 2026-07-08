@@ -17,6 +17,7 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
     var markedInstance = null;
     var markedPromise = null;
     var mathjaxConfigured = false;
+    var pendingQuote = null; // {text, role} — set by reply button
 
     // Math delimiter placeholders (unicode private-use area)
     var BS = String.fromCharCode(92); // backslash
@@ -266,28 +267,30 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         $(document).on('click', '.hermes-reply-btn', function() {
             var text = $(this).data('raw-text');
             var role = $(this).data('role') || 'user';
-            var input = $('#hermes-message-input');
-            var prefix = role === 'assistant' ? '> [Assistant]: ' : '> [Me]: ';
-            var quoted = text.split('\n').map(function(line) {
-                return '> ' + line;
-            }).join('\n');
-            var currentVal = input.val().trim();
-            var newVal;
-            if (currentVal) {
-                newVal = quoted + '\n\n' + currentVal;
-            } else {
-                newVal = quoted + '\n\n';
-            }
-            input.val(newVal);
-            input.focus();
-            // Place cursor at the end
-            var ta = input[0];
-            ta.selectionStart = ta.selectionEnd = ta.value.length;
-            // Visual feedback
+            var label = role === 'assistant' ? 'Quoting Hermes:' : 'Quoting me:';
+
+            // Store the quote
+            pendingQuote = { text: text, role: role };
+
+            // Show the visual quote preview bar
+            $('#hermes-quote-label').text(label);
+            $('#hermes-quote-text').text(text.length > 200 ? text.substring(0, 200) + '…' : text);
+            $('#hermes-quote-preview').show();
+
+            // Focus the input
+            $('#hermes-message-input').focus();
+
+            // Visual feedback on the button
             var orig = $(this).text();
             $(this).text('✓');
             var $btn = $(this);
             setTimeout(function() { $btn.text(orig); }, 1500);
+        });
+
+        // Cancel quote
+        $('#hermes-quote-cancel').on('click', function() {
+            pendingQuote = null;
+            $('#hermes-quote-preview').hide();
         });
 
         // Double-click message content to select it
@@ -393,6 +396,17 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         var input = $('#hermes-message-input');
         var message = input.val().trim();
         if (!message || isStreaming) return;
+
+        // If there's a pending quote, prepend it as a markdown blockquote
+        if (pendingQuote) {
+            var quoted = pendingQuote.text.split('\n').map(function(line) {
+                return '> ' + line;
+            }).join('\n');
+            var who = pendingQuote.role === 'assistant' ? 'Hermes' : 'Me';
+            message = '> **' + who + ' said:**\n' + quoted + '\n\n' + message;
+            pendingQuote = null;
+            $('#hermes-quote-preview').hide();
+        }
 
         if (message.startsWith('/')) {
             input.val('');

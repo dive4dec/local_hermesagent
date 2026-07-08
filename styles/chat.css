@@ -246,6 +246,25 @@
   padding: 0;
 }
 
+/* Blockquotes in rendered markdown */
+.hermes-content blockquote {
+  border-left: 3px solid #4f46e5;
+  margin: 8px 0;
+  padding: 4px 12px;
+  background: #f8fafc;
+  border-radius: 0 4px 4px 0;
+  color: #475569;
+  font-size: 0.92em;
+}
+.hermes-content blockquote p {
+  margin: 4px 0;
+}
+.hermes-user-bubble .hermes-content blockquote {
+  border-left-color: rgba(255,255,255,0.5);
+  background: rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.85);
+}
+
 .hermes-streaming::after {
   content: "▋";
   animation: blink 1s infinite;
@@ -480,6 +499,47 @@
   display: flex;
   gap: 4px;
   margin-top: 4px;
+}
+
+/* Quote preview bar above input */
+.hermes-quote-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px 6px 0 0;
+  border-bottom: none;
+  font-size: 13px;
+  color: #64748b;
+}
+.hermes-quote-label {
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: #4f46e5;
+}
+.hermes-quote-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.hermes-quote-cancel {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+.hermes-quote-cancel:hover {
+  background: #e2e8f0;
+  color: #475569;
 }
 .hermes-copy-btn,
 .hermes-reply-btn {

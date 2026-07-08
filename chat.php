@@ -184,6 +184,21 @@ echo html_writer::end_div('hermes-chat-area');
 
 // Input area
 echo html_writer::start_div('hermes-input-area');
+
+// Quote preview bar (hidden by default, shown when quoting)
+echo html_writer::start_div('hermes-quote-preview', [
+    'id' => 'hermes-quote-preview',
+    'style' => 'display:none;',
+]);
+echo html_writer::tag('span', '', ['id' => 'hermes-quote-label', 'class' => 'hermes-quote-label']);
+echo html_writer::tag('span', '', ['id' => 'hermes-quote-text', 'class' => 'hermes-quote-text']);
+echo html_writer::tag('button', '✕', [
+    'id' => 'hermes-quote-cancel',
+    'class' => 'hermes-quote-cancel',
+    'title' => 'Remove quote',
+]);
+echo html_writer::end_div('hermes-quote-preview');
+
 echo html_writer::start_div('hermes-input-container');
 echo html_writer::tag('textarea', '', [
     'id' => 'hermes-message-input',

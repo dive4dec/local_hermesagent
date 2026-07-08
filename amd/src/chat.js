@@ -293,6 +293,118 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
             $('#hermes-quote-preview').hide();
         });
 
+        // --- Edit message ---
+        $(document).on('click', '.hermes-edit-btn', function() {
+            var $bubble = $(this).closest('.hermes-bubble');
+            var $content = $bubble.find('.hermes-content');
+            var rawText = $(this).data('raw-text');
+            var msgId = $(this).data('msg-id');
+
+            // Replace content div with a textarea
+            var currentText = rawText;
+            var $textarea = $('<textarea class="hermes-edit-input"></textarea>');
+            $textarea.val(currentText);
+            $content.replaceWith($textarea);
+
+            // Replace action buttons with save/cancel
+            var $actions = $bubble.find('.hermes-msg-actions');
+            $actions.hide();
+            var $editActions = $(
+                '<div class="hermes-edit-actions">' +
+                '<button class="btn btn-success btn-sm hermes-edit-save">Save</button> ' +
+                '<button class="btn btn-secondary btn-sm hermes-edit-cancel">Cancel</button>' +
+                '</div>'
+            );
+            $actions.after($editActions);
+
+            $textarea.focus();
+            var ta = $textarea[0];
+            ta.selectionStart = ta.selectionEnd = ta.value.length;
+            ta.style.height = 'auto';
+            ta.style.height = ta.scrollHeight + 'px';
+
+            // Save
+            $editActions.find('.hermes-edit-save').on('click', function() {
+                var newContent = $textarea.val().trim();
+                if (!newContent) return;
+                ajax.call([{
+                    methodname: 'local_hermesagent_edit_message',
+                    args: { messageid: msgId, content: newContent }
+                }])[0].then(function() {
+                    // Re-render the message
+                    var $newContent = $('<div class="hermes-content"></div>');
+                    $textarea.replaceWith($newContent);
+                    setMarkdownContent($newContent, newContent);
+                    $editActions.remove();
+                    $actions.show();
+                    // Update data-raw-text on all buttons
+                    $bubble.find('[data-raw-text]').attr('data-raw-text', newContent);
+                }).catch(function(ex) {
+                    console.error('[Hermes] edit failed:', ex);
+                    alert('Edit failed: ' + (ex.message || ex));
+                });
+            });
+
+            // Cancel
+            $editActions.find('.hermes-edit-cancel').on('click', function() {
+                var $newContent = $('<div class="hermes-content"></div>');
+                $textarea.replaceWith($newContent);
+                setMarkdownContent($newContent, currentText);
+                $editActions.remove();
+                $actions.show();
+            });
+        });
+
+        // --- Delete message ---
+        $(document).on('click', '.hermes-delete-btn', function() {
+            var msgId = $(this).data('msg-id');
+            var $msg = $(this).closest('.hermes-message');
+            if (!confirm('Delete this message?')) return;
+            ajax.call([{
+                methodname: 'local_hermesagent_delete_message',
+                args: { messageid: msgId }
+            }])[0].then(function() {
+                $msg.fadeOut(200, function() { $(this).remove(); });
+            }).catch(function(ex) {
+                console.error('[Hermes] delete failed:', ex);
+                alert('Delete failed: ' + (ex.message || ex));
+            });
+        });
+
+        // --- Paste image into textarea ---
+        $('#hermes-message-input').on('paste', function(e) {
+            var items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image/') !== -1) {
+                    e.preventDefault();
+                    var blob = items[i].getAsFile();
+                    var reader = new FileReader();
+                    reader.onload = function(ev) {
+                        var dataUri = ev.target.result;
+                        // Upload via web service
+                        addSystemMessage('Uploading image...');
+                        ajax.call([{
+                            methodname: 'local_hermesagent_upload_image',
+                            args: { image: dataUri, conversationid: config.conversationid }
+                        }])[0].then(function(res) {
+                            var input = $('#hermes-message-input');
+                            var md = '![](' + res.url + ')';
+                            var currentVal = input.val();
+                            input.val(currentVal + (currentVal ? '\n' : '') + md);
+                            input.focus();
+                            // Remove the "Uploading image..." system message
+                            $('.hermes-system-message').last().fadeOut(200, function() { $(this).remove(); });
+                        }).catch(function(ex) {
+                            console.error('[Hermes] image upload failed:', ex);
+                            alert('Image upload failed: ' + (ex.message || ex));
+                        });
+                    };
+                    reader.readAsDataURL(blob);
+                    break;
+                }
+            }
+        });
+
         // Double-click message content to select it
         $(document).on('dblclick', '.hermes-content', function() {
             var range = document.createRange();
@@ -416,8 +528,19 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
 
         input.data('lastmessage', message);
         input.val('');
-        addUserMessage(message);
-        streamResponse(config.conversationid);
+        // Send to DB first to get message ID, then add to UI
+        ajax.call([{
+            methodname: 'local_hermesagent_send_message',
+            args: { conversationid: config.conversationid, message: message }
+        }])[0].then(function(res) {
+            addUserMessage(message, res.messageid);
+            streamResponse(config.conversationid);
+        }).catch(function(ex) {
+            console.error('[Hermes] send_message failed:', ex);
+            // Still add the message and stream, just without an ID
+            addUserMessage(message, null);
+            streamResponse(config.conversationid);
+        });
     };
 
     var handleSlashCommand = function(cmd) {
@@ -469,19 +592,15 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         var messageEl = addAssistantMessage();
         var spinnerId = 'hermes-spinner-' + msgCounter;
         var rawMarkdown = '';
-        var message = $('#hermes-message-input').data('lastmessage') || '';
 
-        ajax.call([{
-            methodname: 'local_hermesagent_send_message',
-            args: { conversationid: conversationid, message: message }
-        }])[0].then(function() {
-            var es = new EventSource(
-                M.cfg.wwwroot + '/local/hermesagent/api.php?action=stream' +
-                '&conversationid=' + conversationid + '&sesskey=' + config.sesskey
-            );
-            eventSourceRef = es;
+        // Open SSE stream directly — message was already saved in sendMessage()
+        var es = new EventSource(
+            M.cfg.wwwroot + '/local/hermesagent/api.php?action=stream' +
+            '&conversationid=' + conversationid + '&sesskey=' + config.sesskey
+        );
+        eventSourceRef = es;
 
-            es.addEventListener('message', function(e) {
+        es.addEventListener('message', function(e) {
                 try {
                     var data = JSON.parse(e.data);
                     if (data.full === undefined) return;
@@ -539,14 +658,11 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
                 es.close();
                 eventSourceRef = null;
                 finishStreaming(spinnerId);
-                // Add reply + copy buttons inside the bubble, after the content div
-                messageEl.parent().append(
-                    '<div class="hermes-msg-actions">' +
-                    '<button class="hermes-reply-btn" data-raw-text="' + escapeHtml(rawMarkdown) + '" data-role="assistant" title="Quote">↩</button>' +
-                    '<button class="hermes-copy-btn" data-raw-text="' + escapeHtml(rawMarkdown) + '" title="Copy">📋</button>' +
-                    '</div>'
-                );
-                saveAssistantResponse(conversationid, rawMarkdown);
+                // Save assistant response, then add action buttons with the message ID
+                saveAssistantResponse(conversationid, rawMarkdown).then(function(res) {
+                    var msgId = res && res.messageid ? res.messageid : null;
+                    messageEl.parent().append(buildMessageActions(rawMarkdown, 'assistant', msgId));
+                });
             });
 
             es.addEventListener('aborted', function() {
@@ -555,11 +671,6 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
                 finishStreaming(spinnerId);
                 addSystemMessage('Response stopped by user.');
             });
-
-        }).catch(function(ex) {
-            console.error('[Hermes] streamResponse error:', ex);
-            finishStreaming(spinnerId);
-        });
     };
 
     /**
@@ -576,7 +687,7 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
      * Save assistant response to DB via web service.
      */
     var saveAssistantResponse = function(conversationid, content) {
-        ajax.call([{
+        return ajax.call([{
             methodname: 'local_hermesagent_save_assistant_response',
             args: { conversationid: conversationid, content: content }
         }])[0].catch(function(ex) {
@@ -706,18 +817,16 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         });
     };
 
-    var addUserMessage = function(content) {
+    var addUserMessage = function(content, msgId) {
         msgCounter++;
         var contentId = 'hermes-user-content-' + msgCounter;
+        var actionsHtml = buildMessageActions(content, 'user', msgId);
         $('#hermes-chat-area').append(
             '<div class="hermes-message hermes-user-message">' +
             '<div class="hermes-avatar hermes-user-avatar">U</div>' +
             '<div class="hermes-bubble hermes-user-bubble">' +
             '<div class="hermes-content" id="' + contentId + '"></div>' +
-            '<div class="hermes-msg-actions">' +
-            '<button class="hermes-reply-btn" data-raw-text="' + escapeHtml(content) + '" data-role="user" title="Quote">↩</button>' +
-            '<button class="hermes-copy-btn" data-raw-text="' + escapeHtml(content) + '" title="Copy">📋</button>' +
-            '</div>' +
+            actionsHtml +
             '</div></div>'
         );
         setMarkdownContent($('#' + contentId), content);
@@ -753,6 +862,23 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
         return $el;
     };
 
+    /**
+     * Build action buttons HTML for a message.
+     * @param {string} content - Raw message text
+     * @param {string} role - 'user' or 'assistant'
+     * @param {number|null} msgId - Message ID from DB (null for streaming)
+     */
+    var buildMessageActions = function(content, role, msgId) {
+        var escaped = escapeHtml(content);
+        var idAttr = msgId ? ' data-msg-id="' + msgId + '"' : '';
+        return '<div class="hermes-msg-actions">' +
+            '<button class="hermes-reply-btn" data-raw-text="' + escaped + '" data-role="' + role + '" title="Quote">↩</button>' +
+            '<button class="hermes-copy-btn" data-raw-text="' + escaped + '" title="Copy">📋</button>' +
+            (msgId ? '<button class="hermes-edit-btn" data-raw-text="' + escaped + '"' + idAttr + ' title="Edit">✎</button>' +
+             '<button class="hermes-delete-btn"' + idAttr + ' title="Delete">🗑</button>' : '') +
+            '</div>';
+    };
+
     var renderMessages = function(messages) {
         var chatArea = $('#hermes-chat-area');
         chatArea.empty();
@@ -764,15 +890,13 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
 
             if (msg.role === 'user') {
                 var userContentId = 'hermes-hist-user-' + i;
+                var userActions = buildMessageActions(content, 'user', msg.id);
                 chatArea.append(
                     '<div class="hermes-message hermes-user-message">' +
                     '<div class="hermes-avatar hermes-user-avatar">U</div>' +
                     '<div class="hermes-bubble hermes-user-bubble">' +
                     '<div class="hermes-content" id="' + userContentId + '"></div>' +
-                    '<div class="hermes-msg-actions">' +
-                    '<button class="hermes-reply-btn" data-raw-text="' + escapeHtml(content) + '" data-role="user" title="Quote">↩</button>' +
-                    '<button class="hermes-copy-btn" data-raw-text="' + escapeHtml(content) + '" title="Copy">📋</button>' +
-                    '</div>' +
+                    userActions +
                     '</div></div>'
                 );
                 (function(cid, text) {
@@ -786,15 +910,13 @@ define(['jquery', 'core/ajax', 'core/str', 'filter_mathjaxloader/loader'], funct
                 })(userContentId, content);
             } else if (msg.role === 'assistant') {
                 var assistantContentId = 'hermes-hist-asst-' + i;
+                var asstActions = buildMessageActions(content, 'assistant', msg.id);
                 chatArea.append(
                     '<div class="hermes-message hermes-assistant-message">' +
                     '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
                     '<div class="hermes-bubble hermes-assistant-bubble">' +
                     '<div class="hermes-content" id="' + assistantContentId + '"></div>' +
-                    '<div class="hermes-msg-actions">' +
-                    '<button class="hermes-reply-btn" data-raw-text="' + escapeHtml(content) + '" data-role="assistant" title="Quote">↩</button>' +
-                    '<button class="hermes-copy-btn" data-raw-text="' + escapeHtml(content) + '" title="Copy">📋</button>' +
-                    '</div>' +
+                    asstActions +
                     '</div></div>'
                 );
                 (function(cid, text) {

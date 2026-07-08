@@ -74,4 +74,28 @@ $functions = [
         'ajax'          => true,
         'capabilities'  => 'local/hermesagent:use',
     ],
+    'local_hermesagent_edit_message' => [
+        'classname'     => 'local_hermesagent\\external\\chat_api',
+        'methodname'    => 'edit_message',
+        'description'   => 'Edit a message in a conversation',
+        'type'          => 'write',
+        'ajax'          => true,
+        'capabilities'  => 'local/hermesagent:use',
+    ],
+    'local_hermesagent_delete_message' => [
+        'classname'     => 'local_hermesagent\\external\\chat_api',
+        'methodname'    => 'delete_message',
+        'description'   => 'Delete a single message from a conversation',
+        'type'          => 'write',
+        'ajax'          => true,
+        'capabilities'  => 'local/hermesagent:use',
+    ],
+    'local_hermesagent_upload_image' => [
+        'classname'     => 'local_hermesagent\\external\\chat_api',
+        'methodname'    => 'upload_image',
+        'description'   => 'Upload a pasted image and return a URL',
+        'type'          => 'write',
+        'ajax'          => true,
+        'capabilities'  => 'local/hermesagent:use',
+    ],
 ];

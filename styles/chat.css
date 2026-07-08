@@ -494,11 +494,82 @@
   display: none !important;
 }
 
-/* Message action buttons (copy, reply) */
+/* Message action buttons (copy, reply, edit, delete) */
 .hermes-msg-actions {
   display: flex;
   gap: 4px;
   margin-top: 4px;
+}
+.hermes-copy-btn,
+.hermes-reply-btn,
+.hermes-edit-btn,
+.hermes-delete-btn {
+  display: inline-block;
+  background: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.hermes-bubble:hover .hermes-copy-btn,
+.hermes-bubble:hover .hermes-reply-btn,
+.hermes-bubble:hover .hermes-edit-btn,
+.hermes-bubble:hover .hermes-delete-btn {
+  opacity: 0.6;
+}
+.hermes-copy-btn:hover,
+.hermes-reply-btn:hover,
+.hermes-edit-btn:hover,
+.hermes-delete-btn:hover {
+  opacity: 1 !important;
+  background: #f1f5f9;
+}
+.hermes-delete-btn:hover {
+  border-color: #dc3545;
+  color: #dc3545;
+}
+.hermes-user-bubble .hermes-copy-btn,
+.hermes-user-bubble .hermes-reply-btn,
+.hermes-user-bubble .hermes-edit-btn,
+.hermes-user-bubble .hermes-delete-btn {
+  border-color: rgba(255,255,255,0.3);
+  color: rgba(255,255,255,0.7);
+}
+.hermes-user-bubble .hermes-copy-btn:hover,
+.hermes-user-bubble .hermes-reply-btn:hover,
+.hermes-user-bubble .hermes-edit-btn:hover,
+.hermes-user-bubble .hermes-delete-btn:hover {
+  background: rgba(255,255,255,0.15);
+  color: white;
+}
+
+/* Inline edit textarea */
+.hermes-edit-input {
+  width: 100%;
+  min-height: 80px;
+  padding: 8px;
+  border: 1px solid #4f46e5;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.hermes-edit-actions {
+  margin-top: 4px;
+  display: flex;
+  gap: 6px;
+}
+
+/* Images in messages */
+.hermes-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 4px 0;
 }
 
 /* Quote preview bar above input */

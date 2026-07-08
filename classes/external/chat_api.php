@@ -435,5 +435,184 @@ if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_sys
         ]);
     }
 
+    /**
+     * Edit a message.
+     */
+    public static function edit_message_parameters() {
+        return new external_function_parameters([
+            'messageid' => new external_value(PARAM_INT, 'Message ID'),
+            'content' => new external_value(PARAM_RAW, 'New content'),
+        ]);
+    }
+
+    public static function edit_message($messageid, $content) {
+        global $DB, $USER;
+
+        $params = self::validate_parameters(self::edit_message_parameters(), [
+            'messageid' => $messageid,
+            'content' => $content,
+        ]);
+
+        if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+            throw new \moodle_exception('nopermissions', '', '', '');
+        }
+
+        // Verify the message belongs to a conversation owned by this user
+        $msg = $DB->get_record('local_hermesagent_messages', ['id' => $params['messageid']], '*');
+        if (!$msg) {
+            throw new \moodle_exception('invalidmessage');
+        }
+        $conv = $DB->get_record('local_hermesagent_conversations', [
+            'id' => $msg->conversationid,
+            'usermodified' => $USER->id,
+        ]);
+        if (!$conv) {
+            throw new \moodle_exception('invalidconversation');
+        }
+
+        $msg->content = $params['content'];
+        $msg->timemodified = time();
+        $DB->update_record('local_hermesagent_messages', $msg);
+
+        return ['status' => 'ok', 'messageid' => $msg->id];
+    }
+
+    public static function edit_message_returns() {
+        return new external_single_structure([
+            'status' => new external_value(PARAM_ALPHA, 'Status'),
+            'messageid' => new external_value(PARAM_INT, 'Message ID'),
+        ]);
+    }
+
+    /**
+     * Delete a single message.
+     */
+    public static function delete_message_parameters() {
+        return new external_function_parameters([
+            'messageid' => new external_value(PARAM_INT, 'Message ID'),
+        ]);
+    }
+
+    public static function delete_message($messageid) {
+        global $DB, $USER;
+
+        $params = self::validate_parameters(self::delete_message_parameters(), [
+            'messageid' => $messageid,
+        ]);
+
+        if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+            throw new \moodle_exception('nopermissions', '', '', '');
+        }
+
+        $msg = $DB->get_record('local_hermesagent_messages', ['id' => $params['messageid']], '*');
+        if (!$msg) {
+            throw new \moodle_exception('invalidmessage');
+        }
+        $conv = $DB->get_record('local_hermesagent_conversations', [
+            'id' => $msg->conversationid,
+            'usermodified' => $USER->id,
+        ]);
+        if (!$conv) {
+            throw new \moodle_exception('invalidconversation');
+        }
+
+        $DB->delete_records('local_hermesagent_messages', ['id' => $params['messageid']]);
+        // Also delete any tool logs for this message
+        $DB->delete_records('local_hermesagent_tool_log', ['messageid' => $params['messageid']]);
+
+        return ['status' => 'ok', 'deleted' => true];
+    }
+
+    public static function delete_message_returns() {
+        return new external_single_structure([
+            'status' => new external_value(PARAM_ALPHA, 'Status'),
+            'deleted' => new external_value(PARAM_BOOL, 'Deleted'),
+        ]);
+    }
+
+    /**
+     * Upload a pasted image. Saves to Moodle's file area and returns a URL.
+     */
+    public static function upload_image_parameters() {
+        return new external_function_parameters([
+            'image' => new external_value(PARAM_RAW, 'Base64-encoded image data (data URI)'),
+            'conversationid' => new external_value(PARAM_INT, 'Conversation ID'),
+        ]);
+    }
+
+    public static function upload_image($image, $conversationid) {
+        global $DB, $USER, $CFG;
+
+        $params = self::validate_parameters(self::upload_image_parameters(), [
+            'image' => $image,
+            'conversationid' => $conversationid,
+        ]);
+
+        if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_system::instance())) {
+            throw new \moodle_exception('nopermissions', '', '', '');
+        }
+
+        // Verify conversation ownership
+        $conv = $DB->get_record('local_hermesagent_conversations', [
+            'id' => $params['conversationid'],
+            'usermodified' => $USER->id,
+        ]);
+        if (!$conv) {
+            throw new \moodle_exception('invalidconversation');
+        }
+
+        // Parse the data URI: data:image/png;base64,xxxx
+        if (!preg_match('/^data:image\/(\w+);base64,(.+)$/', $params['image'], $m)) {
+            throw new \moodle_exception('invalidimagedata');
+        }
+        $ext = $m[1] === 'jpeg' ? 'jpg' : $m[1];
+        $blob = base64_decode($m[2]);
+        if (!$blob || strlen($blob) > 10485760) { // 10MB limit
+            throw new \moodle_exception('imagetoolarge');
+        }
+
+        // Save to Moodle's file API
+        $context = \context_system::instance();
+        $fs = get_file_storage();
+        $itemid = time();
+        $filename = 'pasted_' . $itemid . '.' . $ext;
+
+        // Delete any previous file with same name/itemid (shouldn't happen)
+        $fs->delete_area_files($context->id, 'local_hermesagent', 'chatimage', $itemid);
+
+        $filerecord = (object)[
+            'contextid' => $context->id,
+            'component' => 'local_hermesagent',
+            'filearea' => 'chatimage',
+            'itemid' => $itemid,
+            'filepath' => '/',
+            'filename' => $filename,
+            'userid' => $USER->id,
+            'timecreated' => $itemid,
+            'timemodified' => $itemid,
+        ];
+
+        $storedfile = $fs->create_file_from_string($filerecord, $blob);
+
+        // Build a pluginfile URL
+        $url = \moodle_url::make_pluginfile_url(
+            $context->id,
+            'local_hermesagent',
+            'chatimage',
+            $itemid,
+            '/',
+            $filename
+        );
+
+        return ['url' => $url->out(false), 'itemid' => $itemid];
+    }
+
+    public static function upload_image_returns() {
+        return new external_single_structure([
+            'url' => new external_value(PARAM_URL, 'Image URL'),
+            'itemid' => new external_value(PARAM_INT, 'File item ID'),
+        ]);
+    }
+
 
 }

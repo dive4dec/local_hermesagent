@@ -59,11 +59,19 @@ fi
 echo ""
 
 # Step 3: Install/update packages
-echo "[3/5] Installing hermes-agent + aiohttp + pymysql + mcp..."
-"$HERMES_HOME/venv/bin/python" -m pip install --quiet --upgrade hermes-agent aiohttp pymysql mcp 2>&1 || \
-    echo "  WARNING: pip install had errors (may still be usable)"
+TARGET_VERSION="$1"
+
+if [ -n "$TARGET_VERSION" ]; then
+    echo "[3/5] Downgrading/Installing specific Hermes version: v$TARGET_VERSION ..."
+    "$HERMES_HOME/venv/bin/python" -m pip install --quiet hermes-agent==$TARGET_VERSION aiohttp pymysql mcp 2>&1 || \
+        echo "  WARNING: pip install for v$TARGET_VERSION had errors"
+else
+    echo "[3/5] Installing/Upgrading to LATEST hermes-agent..."
+    "$HERMES_HOME/venv/bin/python" -m pip install --quiet --upgrade hermes-agent aiohttp pymysql mcp 2>&1 || \
+        echo "  WARNING: pip install had errors"
+fi
 HERMES_VERSION=$("$HERMES_HOME/venv/bin/hermes" --version 2>&1 || echo "unknown")
-echo "  Hermes: $HERMES_VERSION"
+echo "  Current Hermes Version after sync: $HERMES_VERSION"
 
 # Step 3b: Install acp_bridge.py to persistent location
 echo "[3b/5] Installing bridge scripts..."

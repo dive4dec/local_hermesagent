@@ -5,6 +5,53 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.4.2] — 2026-07-14
+
+### Fixed
+
+#### Approval error messaging
+- **Permission buttons now show error when approval fails** — previously,
+  if the user clicked Approve/Reject after the agent had timed out or the
+  bridge had restarted, the buttons either silently re-enabled (no feedback)
+  or showed a generic error. Three failure modes now display a clear message:
+  1. **Expired permission** (agent timed out or bridge restarted): the bridge
+     tracks pending permissions in `_pending_permissions`; when the stream
+     ends (done/timeout/error/abort/process exit), the set is cleared. The
+     `/session/permission` endpoint returns: "This permission request has
+     expired — the agent may have timed out or moved on."
+  2. **Bridge unreachable** (process down): `api.php` detects
+     `curl_exec() === false` and returns: "Bridge unreachable: <curl error>"
+  3. **Server unreachable** (network error): `chat.js` `.fail()` handler
+     shows: "⚠ Failed to reach server: <status>"
+- **`api.php`** — `api_permission_response()` now captures `curl_error()`,
+  decodes the bridge JSON response, and checks `status === "error"` to pass
+  the bridge's error message through to the browser (was returning generic
+  "Bridge error").
+- **`acp_bridge.py`** — `_pending_permissions` set tracks active permission
+  IDs; cleared on all stream exit paths (done, timeout, error, abort, process
+  exit); `discard()` on successful response. Abort path now clears
+  permissions (was missing).
+- **`chat.js`** — `.done()` handler checks `resp.status === "error"` and
+  displays the message; `.fail()` handler shows error text instead of
+  silently re-enabling buttons.
+
+#### Bootstrap cross-platform support
+- **`bootstrap.sh` now works on macOS and WSL2** (in addition to Alpine musl
+  and glibc Linux). Platform detection via `uname -s` / `uname -m`:
+  - macOS Intel: darwin x86_64 builds (Python, uv, ripgrep, Node.js)
+  - macOS Apple Silicon: darwin aarch64 builds
+  - WSL2: detected as Linux glibc — uses gnu builds
+  - macOS Gatekeeper fix: `xattr -dr com.apple.quarantine` on downloaded
+    binaries (same as hermes-usb-portable)
+- **aarch64 fixes**: ripgrep has no musl aarch64 build — uses gnu build
+  (statically linked, works on musl). Node.js has no musl aarch64 build —
+  falls back to gnu build.
+- **`CONFIG_FILE` env var fix** — Python config writer had env vars after
+  the command (passed as argv, not environment). Fixed with `export` before
+  the Python call.
+
+---
+
 ## [0.4.1] — 2026-07-08
 
 ### Fixed

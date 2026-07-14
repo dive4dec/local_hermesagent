@@ -343,6 +343,7 @@ class ACPProcess:
             except queue.Empty:
                 # Check abort during the 0.5s wait gap
                 if abort_event and abort_event.is_set():
+                    self._pending_permissions.clear()
                     return
                 continue
 

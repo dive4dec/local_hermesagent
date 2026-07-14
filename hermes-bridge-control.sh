@@ -69,6 +69,7 @@ start_bridge() {
     fi
     HERMES_HOME="$HERMES_HOME" BRIDGE_PORT="$BRIDGE_PORT" \
         ACP_APPROVAL_TIMEOUT=600 \
+        PATH="$HERMES_HOME/bin:$HERMES_HOME/node/bin:$PATH" \
         nohup "$HERMES_HOME/venv/bin/python" "$BRIDGE_SCRIPT" \
         >> "$HERMES_HOME/logs/bridge.log" 2>&1 &
     echo $! > "$BRIDGE_PID_FILE"

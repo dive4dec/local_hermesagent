@@ -51,9 +51,14 @@ Realistic scenarios where Hermes Agent inside Moodle adds value:
 
 - Moodle 5.0 or later (tested on Moodle 5.x).
 - PHP with curl extension enabled.
-- Python 3.12+ (standalone musl build provided by bootstrap script).
-- Hermes CLI (`hermes-agent` package) — auto-installed by bootstrap or pre-installed manually.
-- The ACP Bridge (`acp_bridge.py`) — shipped with the plugin, runs as `www-data` using a portable Python venv under `moodledata/.hermes/`.
+- Outbound network access for bootstrap downloads.
+- All runtime dependencies are auto-installed by `bootstrap.sh` into `moodledata/.hermes/`:
+  - **Python 3.12** (standalone musl build from astral-sh/python-build-standalone)
+  - **uv** (fast Python package manager, replaces pip — 10-100x faster)
+  - **ripgrep** (fast file search, used by Hermes `search_files` tool)
+  - **Node.js 22 LTS** (musl build, used by Hermes browser/web tools)
+  - **Hermes CLI** (`hermes-agent` package, installed via uv)
+- The ACP Bridge (`acp_bridge.py`) — shipped with the plugin, runs as `www-data`.
 - MathJax CDN access (or a local MathJax mirror in Moodle).
 
 ## Installation

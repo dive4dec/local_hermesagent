@@ -80,6 +80,8 @@ class ACPProcess:
         # prompts would both read from the shared inbox queue and steal each
         # other's session/update chunks.
         self._prompt_lock = threading.Lock()
+        # Track pending permission requests so we can detect stale/expired ones
+        self._pending_permissions = set()  # set of permission_ids (msg ids)
 
     def start(self):
         """Start the hermes acp subprocess."""
@@ -327,6 +329,7 @@ class ACPProcess:
             if self.proc.poll() is not None:
                 stderr = "\n".join(self.stderr_tail[-20:])
                 log.error("ACP process exited! stderr:\n%s", stderr)
+                self._pending_permissions.clear()
                 yield {
                     "type": "error",
                     "error": f"ACP process exited. stderr: {stderr}",
@@ -429,6 +432,7 @@ class ACPProcess:
                 log.info("Forwarding permission request %s to browser: %s", msg_id, call_title)
 
                 # Yield a permission event to the browser
+                self._pending_permissions.add(msg_id)
                 yield {
                     "type": "permission",
                     "permission_id": msg_id,
@@ -447,6 +451,7 @@ class ACPProcess:
 
             # Look for our response (has matching id)
             if msg_id == request_id:
+                self._pending_permissions.clear()
                 if "error" in msg:
                     log.error("ACP error: %s", msg["error"])
                     yield {
@@ -467,6 +472,7 @@ class ACPProcess:
 
         if not done:
             log.warning("Timed out waiting for prompt response")
+            self._pending_permissions.clear()
             yield {
                 "type": "timeout",
                 "text": accumulated_text,
@@ -750,6 +756,10 @@ async def session_permission(request: Request):
     if not acp.proc or acp.proc.poll() is not None:
         return {"status": "error", "message": "ACP process not running"}
 
+    # Check if this permission request is still pending (not expired/timed out)
+    if permission_id not in acp._pending_permissions:
+        return {"status": "error", "message": "This permission request has expired — the agent may have timed out or moved on. Please send a new message to continue."}
+
     # ACP expects RequestPermissionResponse with outcome field:
     # - Approved: {"outcome": {"outcome": "selected", "optionId": "allow_once"}}
     # - Rejected: {"outcome": {"outcome": "cancelled"}}
@@ -764,6 +774,7 @@ async def session_permission(request: Request):
         "result": {"outcome": outcome},
     }
     acp._send_jsonrpc(response)
+    acp._pending_permissions.discard(permission_id)
     log.info("Permission %s %s by user", permission_id, "approved" if approved else "rejected")
     return {"status": "ok", "approved": approved}
 

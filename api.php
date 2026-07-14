@@ -472,10 +472,17 @@ function api_permission_response(): void {
     ]);
     $resp = curl_exec($ch);
     $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlerr = curl_error($ch);
     curl_close($ch);
 
-    if ($http !== 200) {
-        send_json_response(['status' => 'error', 'message' => 'Bridge error']);
+    if ($resp === false) {
+        send_json_response(['status' => 'error', 'message' => 'Bridge unreachable: ' . $curlerr]);
+    }
+
+    $json = json_decode($resp, true);
+    if ($http !== 200 || !$json || ($json['status'] ?? '') === 'error') {
+        $msg = $json['message'] ?? 'Bridge error (HTTP ' . $http . ')';
+        send_json_response(['status' => 'error', 'message' => $msg]);
     }
 
     send_json_response(['status' => 'ok', 'approved' => $approved]);

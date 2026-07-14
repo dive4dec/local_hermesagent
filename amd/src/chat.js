@@ -816,13 +816,20 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
                 permission_id: permId,
                 approved: approved ? 1 : 0
             }
-        }).done(function() {
-            $btnContainer.html('<span class="text-' + (approved ? 'success' : 'danger') + '">' +
-                (approved ? '✓ Approved' : '✗ Rejected') + '</span>');
+        }).done(function(resp) {
+            if (resp && resp.status === 'error') {
+                $btnContainer.html('<span class="text-danger">⚠ ' +
+                    escapeHtml(resp.message || 'Permission request failed') + '</span>');
+            } else {
+                $btnContainer.html('<span class="text-' + (approved ? 'success' : 'danger') + '">' +
+                    (approved ? '✓ Approved' : '✗ Rejected') + '</span>');
+            }
             scrollToEnd();
         }).fail(function(ex) {
             console.error('[Hermes] permission response failed:', ex);
-            $btnContainer.find('button').prop('disabled', false);
+            $btnContainer.html('<span class="text-danger">⚠ Failed to reach server' +
+                (ex.statusText ? ': ' + escapeHtml(ex.statusText) : '') + '</span>');
+            scrollToEnd();
         });
     };
 

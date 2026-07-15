@@ -5,6 +5,99 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.4.3] — 2026-07-15
+
+### Added
+
+#### Text-based approval commands
+- **`!approve`, `!approve session`, `!approve always`, `!reject`** — users can
+  type approval commands directly in the chat input instead of clicking
+  buttons. The Send button is now enabled during permission waits so these
+  commands can be sent while the SSE stream is open. Permission responses go
+  via a separate POST endpoint (`/session/permission`), so typing a normal
+  message while a permission is pending is safe.
+- Three approval levels supported: `allow_once` (default), `allow_session`
+  (auto-approve for the rest of the session), `allow_always` (auto-approve
+  all future calls to the same tool).
+
+#### Tool call forwarding to chat UI
+- **Tool call events are now forwarded from ACP → bridge → api.php → browser**
+  via a new `tool_call` SSE event type. Previously, tool calls were invisible
+  to the user — only the final text response appeared.
+- Each tool call renders as a collapsible `<details>` block showing the tool
+  name, status (executing/completed), and result text.
+- **Download links for `moodle_upload_file`** — when the agent uploads a file
+  to Moodle, a blue **⬇ Download** button appears inside the tool call card,
+  linking to `mod/resource/view.php?id={cmid}`.
+
+#### Auto-linking of bare URLs in agent responses
+- **Code-block URLs → download buttons** — when the agent puts a download URL
+  inside a markdown code block (```` ``` ````), it renders as a blue
+  **⬇ Download {filename}** button instead of plain text.
+- **Bare URLs anywhere in the response** are auto-linked as clickable
+  hyperlinks.
+
+### Fixed
+
+#### SSE keepalive during all idle periods
+- **Keepalive now fires every 15 seconds unconditionally** during all idle
+  periods (permission waits, LLM API calls, tool execution), not just during
+  permission waits. Previously, a 65-second LLM API call with no SSE output
+  would trigger the K8s ingress 60-second `proxy_read_timeout`, causing a
+  "Connection error" in the browser. The 15-second keepalive (`: keepalive\n\n`,
+  ~12 bytes) keeps the connection alive well within the 60s timeout.
+
+#### Bridge deadline removed
+- The bridge's internal deadline competed with the ACP adapter's own
+  `ACP_APPROVAL_TIMEOUT` (600s), causing approvals to time out faster than
+  expected. The bridge deadline is removed entirely; the ACP adapter is the
+  sole timeout authority.
+
+#### Terminal text selection
+- **Clicking inside the terminal no longer steals text selection** — the
+  click handler now checks `event.target.closest('input, textarea, button')`
+  before calling `focus()`, so selecting and copying output text works
+  correctly. Fixed in both `amd/src/terminal.js` (AMD module) and
+  `styles/terminal.js` (inline terminal page).
+
+#### Duplicate "Thinking..." blocks
+- **Only one "Thinking..." block per assistant response** — previously, each
+  tool call incremented `msgCounter`, which was used to derive the reasoning
+  element ID. When a tool call arrived mid-stream, the next reasoning event
+  couldn't find the existing element and created a new one. With N tool calls,
+  you'd get N+1 "Thinking..." blocks. The reasoning ID is now captured once
+  at stream start and stays stable for the entire stream.
+
+#### Conversation duplication on refresh
+- **PRG (Post/Redirect/Get) pattern for new conversations** — after creating
+  a conversation via `?action=new`, the server now redirects to
+  `?conversationid=X`. Previously, the URL stayed as `?action=new`, so an F5
+  refresh would re-trigger the INSERT and create a duplicate conversation.
+
+#### Tool calls and permissions inside same message bubble
+- **Tool calls, permissions, and reasoning now render inside the same
+  assistant message bubble** instead of as separate full messages. Previously,
+  each tool call created a separate `.hermes-message` with its own avatar and
+  bubble, causing excessive screen space. Permission prompts were also
+  separate messages, often hidden in collapsed content. Now everything shares
+  one avatar and one bubble:
+  - Reasoning ("Thinking...") — collapsible, above the response text
+  - Tool calls — collapsible `<details>` blocks, with download links
+  - Permission prompts — visible (not collapsed), with Approve/Reject buttons
+  - Final text response — at the bottom of the bubble
+
+#### `.gitignore` fix
+- Removed overly broad `build/` pattern that was ignoring Moodle's
+  `amd/build/` directory. Added `amd/build/.gitkeep` to preserve the
+  directory in git.
+
+#### `sync.sh` NFS safety
+- Replaced `rm -rf` + tar with tar `--overwrite` overlay. The `rm -rf` on
+  NFS-backed PVC left `.nfs` stale handles that prevented deletion, causing
+  sync to fail and partially wipe the plugin.
+
+---
+
 ## [0.4.2] — 2026-07-14
 
 ### Fixed

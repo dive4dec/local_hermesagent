@@ -1266,8 +1266,47 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     };
 
     /**
+     * Post-process rendered HTML to auto-link bare URLs and convert
+     * code-block-only-URLs into download buttons.
+     */
+    var postProcessLinks = function(html) {
+        // 1. Convert <pre><code> blocks that contain only a URL into download buttons.
+        //    The agent often puts download links in fenced code blocks like:
+        //    ```
+        //    https://socratic.cs.cityu.edu.hk/edb/pluginfile.php/...
+        //    ```
+        html = html.replace(/<pre><code[^>]*>([\s\S]*?)<\/code><\/pre>/g, function(match, inner) {
+            var trimmed = inner.trim();
+            // Check if the code block contains only a URL (possibly with entities)
+            var urlMatch = trimmed.match(/^(https?:\/\/[^\s<]+)/);
+            if (urlMatch) {
+                var url = urlMatch[1];
+                // Decode HTML entities that marked.js may have added
+                url = url.replace(/&amp;/g, '&');
+                var filename = url.split('/').pop();
+                try { filename = decodeURIComponent(filename); } catch (e) { /* keep raw */ }
+                return '<div class="hermes-file-download">' +
+                    '<a href="' + url + '" target="_blank" class="btn btn-primary">' +
+                    '⬇ Download ' + escapeHtml(filename) + '</a></div>';
+            }
+            return match; // Keep original if not a URL
+        });
+
+        // 2. Auto-link bare URLs that are not already inside <a> tags or code blocks.
+        //    Skip URLs that are already part of an attribute or link.
+        html = html.replace(/(?<!["'>])(?<!href=")(https?:\/\/[^\s<]+)/g, function(match, url) {
+            // Don't link if already inside an <a> tag (check for preceding </a> or href)
+            // Also skip URLs that end with common punctuation
+            var cleanUrl = url.replace(/[.,;!?)]+$/, '');
+            return '<a href="' + cleanUrl + '" target="_blank">' + cleanUrl + '</a>';
+        });
+
+        return html;
+    };
+
+    /**
      * Render markdown to HTML, protecting math delimiters from marked.js.
-     * Pipeline: protect \[...\] and $$...$$ → render markdown → restore delimiters.
+     * Pipeline: protect \[...\] and $$...$$ → render markdown → restore delimiters → post-process links.
      */
     var renderMarkdown = function(text) {
         if (!text || !text.trim()) return Promise.resolve('');
@@ -1281,7 +1320,8 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         });
         text = protectMathDelimiters(text);
         return loadMarked().then(function(m) {
-            return unescapeMathDelimiters(m.parse(text));
+            var html = unescapeMathDelimiters(m.parse(text));
+            return postProcessLinks(html);
         }).catch(function(err) {
             console.error('[Hermes] markdown parse failed:', err);
             return escapeHtml(text);

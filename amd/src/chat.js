@@ -722,6 +722,10 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         var spinnerId = 'hermes-spinner-' + msgCounter;
         var rawMarkdown = '';
 
+        // Capture the reasoning element ID at stream start so it stays
+        // stable even if addToolCallToChat() increments msgCounter mid-stream.
+        var reasoningId = 'hermes-reasoning-' + msgCounter;
+
         // Open SSE stream directly — message was already saved in sendMessage()
         var es = new EventSource(
             M.cfg.wwwroot + '/local/hermesagent/api.php?action=stream' +
@@ -735,16 +739,15 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
                     if (data.full === undefined) return;
 
                     if (data.type === 'reasoning') {
-                        var rid = 'hermes-reasoning-' + msgCounter;
-                        if (!$('#' + rid).length) {
+                        if (!$('#' + reasoningId).length) {
                             messageEl.after(
-                                '<details class="hermes-reasoning" id="' + rid + '">' +
+                                '<details class="hermes-reasoning" id="' + reasoningId + '">' +
                                 '<summary class="hermes-reasoning-summary">Thinking...</summary>' +
-                                '<div class="hermes-reasoning-content" id="' + rid + '-content"></div>' +
+                                '<div class="hermes-reasoning-content" id="' + reasoningId + '-content"></div>' +
                                 '</details>'
                             );
                         }
-                        setMarkdownContent($('#' + rid + '-content'), data.full);
+                        setMarkdownContent($('#' + reasoningId + '-content'), data.full);
                         scrollToEnd();
                         return;
                     }

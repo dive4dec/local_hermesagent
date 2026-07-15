@@ -48,16 +48,16 @@ $conversations = $DB->get_records('local_hermesagent_conversations', ['usermodif
 
 // Create new conversation if needed
 $current_id = $conversationid;
-$newly_created = false;
 if ($action == 'new') {
-    // Explicitly requested new conversation
+    // Explicitly requested new conversation — create then redirect (PRG pattern)
+    // so that refreshing the page does not create duplicate conversations.
     $rec = new stdClass();
     $rec->name = get_string('newconversation', 'local_hermesagent');
     $rec->usermodified = $USER->id;
     $rec->timecreated = time();
     $rec->timemodified = time();
     $current_id = $DB->insert_record('local_hermesagent_conversations', $rec);
-    $newly_created = true;
+    redirect(new moodle_url('/local/hermesagent/chat.php', ['conversationid' => $current_id]));
 } else if ($current_id > 0) {
     $conv = $DB->get_record('local_hermesagent_conversations', ['id' => $current_id], '*', MUST_EXIST);
 } else if (!empty($conversations)) {
@@ -65,19 +65,14 @@ if ($action == 'new') {
     $most_recent = reset($conversations);
     $current_id = $most_recent->id;
 } else {
-    // No existing conversations - create first one
+    // No existing conversations - create first one, then redirect (PRG pattern)
     $rec = new stdClass();
     $rec->name = get_string('newconversation', 'local_hermesagent');
     $rec->usermodified = $USER->id;
     $rec->timecreated = time();
     $rec->timemodified = time();
     $current_id = $DB->insert_record('local_hermesagent_conversations', $rec);
-    $newly_created = true;
-}
-
-// If we just created a new conversation, re-fetch the list so it includes the new entry
-if ($newly_created) {
-    $conversations = $DB->get_records('local_hermesagent_conversations', ['usermodified' => $USER->id], 'timemodified DESC');
+    redirect(new moodle_url('/local/hermesagent/chat.php', ['conversationid' => $current_id]));
 }
 
 // Get bridge status (live check)

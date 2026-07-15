@@ -354,14 +354,14 @@ class ACPProcess:
                     self._pending_permissions.clear()
                     self._permission_options.clear()
                     return
-                # Send SSE keepalive comment while waiting (e.g. during permission
-                # approval).  Without this, the K8s ingress proxy_read_timeout
-                # (60s default) kills the idle connection → "Connection error".
-                if self._pending_permissions:
-                    now = time.monotonic()
-                    if now - last_keepalive >= 15:
-                        last_keepalive = now
-                        yield {"type": "keepalive"}
+                # Send SSE keepalive comment while waiting — during long LLM API
+                # calls (30–90s) and during permission approval waits.  Without
+                # this, the K8s ingress proxy_read_timeout (60s default) kills
+                # the idle connection → "Connection error".
+                now = time.monotonic()
+                if now - last_keepalive >= 15:
+                    last_keepalive = now
+                    yield {"type": "keepalive"}
                 continue
             # Skip messages for other requests
             msg_id = msg.get("id")

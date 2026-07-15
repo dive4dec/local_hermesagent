@@ -901,39 +901,103 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     // Tool call display
     // ---------------------------------------------------------------------------
 
+    // Track tool calls by toolCallId so we can update them in-place when
+    // the tool_call_update event arrives.
+    var toolCallElements = {};
+
     var addToolCallToChat = function(tc) {
+        // New format from bridge SSE: { title, kind, status, result_text, toolcall_id, session_update }
+        var toolcallId = tc.toolcall_id || '';
+        var title = tc.title || 'Tool call';
+        var status = tc.status || '';
+        var resultText = tc.result_text || '';
+        var sessionUpdate = tc.session_update || '';
+
+        // If we already have an element for this toolcall_id, update it
+        if (toolcallId && toolCallElements[toolcallId]) {
+            var existing = toolCallElements[toolcallId];
+            if (status) {
+                existing.find('.hermes-tool-status').html(
+                    status === 'completed'
+                        ? '<span class="text-success">completed</span>'
+                        : '<span class="text-warning">' + escapeHtml(status) + '</span>'
+                );
+            }
+            if (resultText) {
+                var resultHtml = formatToolResult(resultText, title);
+                existing.find('.hermes-tool-result').html(resultHtml);
+            }
+            scrollToEnd();
+            return;
+        }
+
+        // Create new tool call element
+        msgCounter++;
         var msgId = 'hermes-tool-call-' + msgCounter;
-        var hasResult = tc.result && typeof tc.result === 'object' &&
-            !tc.result.error && Object.keys(tc.result).length > 0;
-        var resultText = hasResult
-            ? (tc.result.rows ? buildTableMarkdown(tc.result) : JSON.stringify(tc.result, null, 2))
-            : '';
+        var statusHtml = status === 'completed'
+            ? '<span class="text-success">completed</span>'
+            : (status ? '<span class="text-warning">' + escapeHtml(status) + '</span>'
+                       : '<span class="text-warning">executing</span>');
 
         var html = '<div class="hermes-message hermes-assistant-message hermes-tool-call" id="' + msgId + '">' +
             '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
             '<div class="hermes-bubble hermes-assistant-bubble hermes-tool-bubble">' +
             '<details class="hermes-tool-details">' +
             '<summary class="hermes-tool-summary">' +
-            '<span class="hermes-tool-icon">&#9881;</span> ' + escapeHtml(tc.name) +
-            ' <span class="hermes-tool-status">' +
-            (tc.status === 'completed'
-                ? '<span class="text-success">completed</span>'
-                : '<span class="text-warning">executing</span>') +
-            '</span></summary>' +
-            '<div class="hermes-tool-input"><strong>Input:</strong> ' +
-            '<code>' + escapeHtml(JSON.stringify(tc.input, null, 2)) + '</code></div>';
+            '<span class="hermes-tool-icon">&#9881;</span> ' + escapeHtml(title) +
+            ' <span class="hermes-tool-status">' + statusHtml + '</span></summary>';
 
-        if (hasResult) {
-            html += '<div class="hermes-tool-result"><strong>Result:</strong> ' +
-                '<pre>' + escapeHtml(resultText) + '</pre></div>';
-        } else if (tc.result && tc.result.error) {
-            html += '<div class="hermes-tool-result" style="color: red;">' +
-                '<strong>Error:</strong> ' + escapeHtml(tc.result.error) + '</div>';
+        if (resultText) {
+            html += '<div class="hermes-tool-result">' +
+                formatToolResult(resultText, title) + '</div>';
+        } else {
+            html += '<div class="hermes-tool-result"></div>';
         }
 
         html += '</details></div></div>';
-        $('#hermes-chat-area').append(html);
+        var $el = $(html);
+        $('#hermes-chat-area').append($el);
+        if (toolcallId) {
+            toolCallElements[toolcallId] = $el;
+        }
         scrollToEnd();
+    };
+
+    /**
+     * Format tool result text, extracting download links for moodle_upload_file.
+     */
+    var formatToolResult = function(resultText, toolTitle) {
+        var html = '<pre>' + escapeHtml(resultText) + '</pre>';
+
+        // If this is a moodle_upload_file result, extract the cmid and
+        // add a download link.
+        // Result text looks like:
+        //   moodle_upload_file result
+        //   - **name:** iRAT3 Solutions (CS2310_25a)
+        //   - **cmid:** 529
+        //   - **resource_id:** 12
+        //   - **file_id:** 7925
+        //   - **course:** 11
+        var cmidMatch = resultText.match(/cmid:\*\*\s*(\d+)/i);
+        var nameMatch = resultText.match(/name:\*\*\s*(.+)/i);
+        if (cmidMatch) {
+            var cmid = cmidMatch[1];
+            var fileName = nameMatch ? nameMatch[1].trim() : 'File';
+            var url = M.cfg.wwwroot + '/mod/resource/view.php?id=' + cmid;
+            html += '<div class="hermes-file-download">' +
+                '<a href="' + url + '" target="_blank" class="btn btn-primary btn-sm">' +
+                '⬇ Download ' + escapeHtml(fileName) + '</a></div>';
+        }
+
+        // Also detect plain file paths in terminal results (e.g. "HTML written: /path/to/file")
+        var pathMatch = resultText.match(/(?:written|saved|created|output):\s*(\/[^\s\\]+)/i);
+        if (pathMatch && !cmidMatch) {
+            var filePath = pathMatch[1];
+            // Only show the path as info — can't download directly from chat
+            html += '<div class="hermes-file-info">File: <code>' + escapeHtml(filePath) + '</code></div>';
+        }
+
+        return html;
     };
 
     var buildTableMarkdown = function(result) {

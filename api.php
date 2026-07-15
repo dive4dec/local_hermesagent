@@ -321,6 +321,14 @@ function api_stream_response(): void {
                         echo "event: permission\ndata: " . json_encode($perm_data) . "\n\n";
                         flush();
                     }
+                    
+                    // Handle tool_call events — forward to browser so user can
+                    // see what tools the agent is using (e.g. moodle_upload_file
+                    // results with download links).
+                    if ($etype === 'tool_call') {
+                        echo "event: tool_call\ndata: " . json_encode($json) . "\n\n";
+                        flush();
+                    }
 
                     // Handle done event
                     if ($etype === 'done') {

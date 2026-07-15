@@ -401,6 +401,41 @@ class ACPProcess:
                         "delta": text,
                         "full": accumulated_reasoning,
                     }
+                elif kind in ("tool_call", "tool_call_update"):
+                    # Forward tool call info to the browser so the user can see
+                    # what tools the agent is using and their results (e.g.
+                    # moodle_upload_file returns a download link).
+                    tc_title = update.get("title", "")
+                    tc_kind = update.get("kind", "")
+                    tc_status = update.get("status", "")
+                    tc_toolcall_id = update.get("toolCallId", "")
+                    # Extract result text from content items
+                    tc_text_parts = []
+                    content_items = update.get("content", [])
+                    if isinstance(content_items, list):
+                        for item in content_items:
+                            if isinstance(item, dict):
+                                ic = item.get("content", {})
+                                if isinstance(ic, dict) and ic.get("text"):
+                                    tc_text_parts.append(ic["text"])
+                                elif isinstance(item, dict) and item.get("text"):
+                                    tc_text_parts.append(item["text"])
+                    elif isinstance(content_items, dict):
+                        ic = content_items.get("content", {})
+                        if isinstance(ic, dict) and ic.get("text"):
+                            tc_text_parts.append(ic["text"])
+
+                    yield {
+                        "type": "tool_call",
+                        "tool_call": {
+                            "title": tc_title,
+                            "kind": tc_kind,
+                            "status": tc_status,
+                            "toolcall_id": tc_toolcall_id,
+                            "result_text": "\n".join(tc_text_parts),
+                            "session_update": kind,
+                        },
+                    }
                 continue
 
             # Handle session/request_permission - forward to browser for approval
@@ -700,6 +735,16 @@ async def session_prompt(request: Request):
                         "session_id": acp_session_id,
                     }
                     yield f"data: {json.dumps(data)}\n\n"
+
+                elif event_type == "tool_call":
+                    # Forward tool call info to browser (tool started, completed, etc.)
+                    tc = event.get("tool_call", {})
+                    data = {
+                        "type": "tool_call",
+                        "tool_call": tc,
+                        "session_id": acp_session_id,
+                    }
+                    yield f"event: tool_call\ndata: {json.dumps(data)}\n\n"
 
                 elif event_type == "permission":
                     # Forward permission request to browser for approval

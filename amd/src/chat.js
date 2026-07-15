@@ -583,7 +583,25 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     var sendMessage = function() {
         var input = $('#hermes-message-input');
         var message = input.val().trim();
-        if (!message || isStreaming) return;
+        if (!message) return;
+
+        // Slash commands (!approve, !reject, /stop, /help, etc.) are allowed
+        // even while streaming — they don't start a new SSE request and won't
+        // interfere with the active stream.  Only normal chat messages are
+        // blocked during streaming to avoid queuing multiple requests.
+        if (message.startsWith('!')) {
+            input.val('');
+            handleApprovalCommand(message);
+            return;
+        }
+        if (message.startsWith('/')) {
+            input.val('');
+            handleSlashCommand(message);
+            return;
+        }
+
+        // Normal chat message — blocked while another response is streaming.
+        if (isStreaming) return;
 
         // If there's a pending quote, prepend it as a markdown blockquote
         if (pendingQuote) {
@@ -594,19 +612,6 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             message = '> **' + who + ' said:**\n' + quoted + '\n\n' + message;
             pendingQuote = null;
             $('#hermes-quote-preview').hide();
-        }
-
-        if (message.startsWith('/')) {
-            input.val('');
-            handleSlashCommand(message);
-            return;
-        }
-
-        // Text-based approval commands (work while a permission prompt is pending)
-        if (message.startsWith('!')) {
-            input.val('');
-            handleApprovalCommand(message);
-            return;
         }
 
         input.data('lastmessage', message);
@@ -827,6 +832,11 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         var permId = permData.permission_id;
         var title = permData.title || 'Tool execution requested';
         var desc = permData.description || '';
+
+        // Re-enable the Send button so the user can type !approve / !reject
+        // (the button was disabled by streamResponse).  The SSE stream stays
+        // open; permission responses go via a separate POST endpoint.
+        $('#hermes-send-btn').prop('disabled', false);
 
         var html = '<div class="hermes-message hermes-assistant-message hermes-perm-request">' +
             '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +

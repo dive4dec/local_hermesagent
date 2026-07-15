@@ -722,9 +722,12 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         var spinnerId = 'hermes-spinner-' + msgCounter;
         var rawMarkdown = '';
 
-        // Capture the reasoning element ID at stream start so it stays
-        // stable even if addToolCallToChat() increments msgCounter mid-stream.
+        // Capture the reasoning element ID and the bubble element at stream
+        // start so they stay stable even if msgCounter changes mid-stream.
         var reasoningId = 'hermes-reasoning-' + msgCounter;
+        // The bubble is the parent of the content div — all tool calls,
+        // permissions, and reasoning go inside this same bubble.
+        var bubbleEl = messageEl.parent();
 
         // Open SSE stream directly — message was already saved in sendMessage()
         var es = new EventSource(
@@ -740,7 +743,9 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
                     if (data.type === 'reasoning') {
                         if (!$('#' + reasoningId).length) {
-                            messageEl.after(
+                            // Insert reasoning BEFORE the content div so it
+                            // appears above the response text in the same bubble.
+                            messageEl.before(
                                 '<details class="hermes-reasoning" id="' + reasoningId + '">' +
                                 '<summary class="hermes-reasoning-summary">Thinking...</summary>' +
                                 '<div class="hermes-reasoning-content" id="' + reasoningId + '-content"></div>' +
@@ -762,7 +767,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
             es.addEventListener('tool_call', function(e) {
                 try {
-                    addToolCallToChat(JSON.parse(e.data).tool_call);
+                    addToolCallToChat(JSON.parse(e.data).tool_call, bubbleEl, messageEl);
                 } catch (ex) {
                     console.error('[Hermes] tool_call parse error:', ex);
                 }
@@ -770,7 +775,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
             es.addEventListener('permission', function(e) {
                 try {
-                    addPermissionToChat(JSON.parse(e.data));
+                    addPermissionToChat(JSON.parse(e.data), bubbleEl, messageEl);
                 } catch (ex) {
                     console.error('[Hermes] permission parse error:', ex);
                 }
@@ -831,7 +836,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     // Tool approval (inline, non-blocking)
     // ---------------------------------------------------------------------------
 
-    var addPermissionToChat = function(permData) {
+    var addPermissionToChat = function(permData, bubbleEl, messageEl) {
         var permId = permData.permission_id;
         var title = permData.title || 'Tool execution requested';
         var desc = permData.description || '';
@@ -841,12 +846,13 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         // open; permission responses go via a separate POST endpoint.
         $('#hermes-send-btn').prop('disabled', false);
 
-        var html = '<div class="hermes-message hermes-assistant-message hermes-perm-request">' +
-            '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
-            '<div class="hermes-bubble hermes-assistant-bubble hermes-perm-bubble">' +
+        // Insert permission prompt into the current assistant message bubble,
+        // BEFORE the content div so it's visible above the response text.
+        var permIdAttr = 'hermes-perm-' + permId;
+        var html = '<div class="hermes-perm-request" id="' + permIdAttr + '">' +
             '<div class="hermes-perm-header">' +
-            '<span class="hermes-perm-icon">&#9881;</span> ' +
-            '<strong>' + escapeHtml(title) + '</strong>' +
+            '<span class="hermes-perm-icon">&#9888;</span> ' +
+            '<strong>Permission: ' + escapeHtml(title) + '</strong>' +
             '</div>';
         if (desc) {
             html += '<pre class="hermes-perm-desc">' + escapeHtml(desc) + '</pre>';
@@ -857,9 +863,18 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             '<button class="btn btn-success btn-sm hermes-perm-approve-session" data-outcome="allow_session">Approve session</button> ' +
             '<button class="btn btn-success btn-sm hermes-perm-approve-always" data-outcome="allow_always">Approve always</button> ' +
             '<button class="btn btn-danger btn-sm hermes-perm-reject" data-outcome="deny">Reject</button>' +
-            '</div></div></div>';
+            '</div></div>';
 
-        $('#hermes-chat-area').append(html);
+        if (bubbleEl) {
+            messageEl.before(html);
+        } else {
+            // Fallback: standalone message (e.g. for history reload)
+            $('#hermes-chat-area').append(
+                '<div class="hermes-message hermes-assistant-message">' +
+                '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
+                '<div class="hermes-bubble hermes-assistant-bubble">' + html + '</div></div>'
+            );
+        }
         scrollToEnd();
     };
 
@@ -908,7 +923,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     // the tool_call_update event arrives.
     var toolCallElements = {};
 
-    var addToolCallToChat = function(tc) {
+    var addToolCallToChat = function(tc, bubbleEl, messageEl) {
         // New format from bridge SSE: { title, kind, status, result_text, toolcall_id, session_update }
         var toolcallId = tc.toolcall_id || '';
         var title = tc.title || 'Tool call';
@@ -934,18 +949,16 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             return;
         }
 
-        // Create new tool call element
-        msgCounter++;
-        var msgId = 'hermes-tool-call-' + msgCounter;
+        // Create new tool call element — a collapsible <details> that goes
+        // INSIDE the current assistant message bubble (not a separate message).
+        var tcCounter = Object.keys(toolCallElements).length + 1;
+        var msgId = 'hermes-tool-call-' + Date.now() + '-' + tcCounter;
         var statusHtml = status === 'completed'
             ? '<span class="text-success">completed</span>'
             : (status ? '<span class="text-warning">' + escapeHtml(status) + '</span>'
                        : '<span class="text-warning">executing</span>');
 
-        var html = '<div class="hermes-message hermes-assistant-message hermes-tool-call" id="' + msgId + '">' +
-            '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
-            '<div class="hermes-bubble hermes-assistant-bubble hermes-tool-bubble">' +
-            '<details class="hermes-tool-details">' +
+        var html = '<details class="hermes-tool-call" id="' + msgId + '">' +
             '<summary class="hermes-tool-summary">' +
             '<span class="hermes-tool-icon">&#9881;</span> ' + escapeHtml(title) +
             ' <span class="hermes-tool-status">' + statusHtml + '</span></summary>';
@@ -957,9 +970,21 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             html += '<div class="hermes-tool-result"></div>';
         }
 
-        html += '</details></div></div>';
+        html += '</details>';
+
         var $el = $(html);
-        $('#hermes-chat-area').append($el);
+
+        if (bubbleEl) {
+            // Insert into the current assistant bubble, before the content div
+            // (same position as reasoning/permission blocks).
+            messageEl.before($el);
+        } else {
+            // Fallback: standalone message (e.g. for history reload)
+            $el = $('<div class="hermes-message hermes-assistant-message">' +
+                '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
+                '<div class="hermes-bubble hermes-assistant-bubble">' + html + '</div></div>');
+            $('#hermes-chat-area').append($el);
+        }
         if (toolcallId) {
             toolCallElements[toolcallId] = $el;
         }

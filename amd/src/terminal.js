@@ -53,8 +53,12 @@ define(['jquery'], function($) {
             }
         });
 
-        $('#hermes-terminal-container').on('click', function() {
-            inputEl.focus();
+        $('#hermes-terminal-container').on('click', function(e) {
+            // Only focus input if the click is NOT in the output area,
+            // so text selection in the output works normally.
+            if (!$(e.target).closest('#hermes-terminal-output').length) {
+                inputEl.focus();
+            }
         });
 
         setTimeout(function() { inputEl.focus(); }, 100);

@@ -82,6 +82,7 @@ class ACPProcess:
         self._prompt_lock = threading.Lock()
         # Track pending permission requests so we can detect stale/expired ones
         self._pending_permissions = set()  # set of permission_ids (msg ids)
+        self._permission_options = {}    # {permission_id: set(offered optionIds)}
 
     def start(self):
         """Start the hermes acp subprocess."""
@@ -320,16 +321,22 @@ class ACPProcess:
         self.proc.stdin.write(json.dumps(payload) + "\n")
         self.proc.stdin.flush()
 
-        deadline = time.monotonic() + timeout
+        # No deadline — the ACP adapter imposes its own timeout on approval
+        # requests (future.result(timeout=ACP_APPROVAL_TIMEOUT) in permissions.py),
+        # and the agent loop has max_turns.  Removing the bridge deadline avoids
+        # a competing timer that kills the SSE stream while the user is still
+        # deciding on an approval.  The loop exits on: final response (done),
+        # process exit, or user abort.
         accumulated_text = ""
         accumulated_reasoning = ""
         done = False
 
-        while time.monotonic() < deadline and not done:
+        while not done:
             if self.proc.poll() is not None:
                 stderr = "\n".join(self.stderr_tail[-20:])
                 log.error("ACP process exited! stderr:\n%s", stderr)
                 self._pending_permissions.clear()
+                self._permission_options.clear()
                 yield {
                     "type": "error",
                     "error": f"ACP process exited. stderr: {stderr}",
@@ -434,6 +441,11 @@ class ACPProcess:
 
                 # Yield a permission event to the browser
                 self._pending_permissions.add(msg_id)
+                # Store the offered options so /session/permission can validate
+                self._permission_options[msg_id] = {
+                    opt.get("optionId", "") for opt in options
+                    if isinstance(opt, dict)
+                }
                 yield {
                     "type": "permission",
                     "permission_id": msg_id,
@@ -472,13 +484,8 @@ class ACPProcess:
                 done = True
 
         if not done:
-            log.warning("Timed out waiting for prompt response")
+            # Loop exited without a final response — process died or user aborted.
             self._pending_permissions.clear()
-            yield {
-                "type": "timeout",
-                "text": accumulated_text,
-                "reasoning": accumulated_reasoning,
-            }
 
 
 # Singleton
@@ -553,6 +560,20 @@ async def session_prompt(request: Request):
     system_prompt = body.get("system_prompt", "")
     messages = body.get("messages", [])
     stored_acp_session_id = body.get("acp_session_id", "")
+
+    # Moodle user identity — written to a file so the moodle-bridge plugin can
+    # read it during tool calls. The shared Hermes subprocess is single-threaded
+    # (prompts are serialized via _prompt_lock), so a file is safe here.
+    moodle_username = body.get("moodle_username", "")
+    moodle_userid = body.get("moodle_userid", "")
+    if moodle_username:
+        identity_file = Path(HERMES_HOME_ENV) / ".moodle_identity"
+        try:
+            identity_file.write_text(
+                json.dumps({"username": moodle_username, "userid": moodle_userid})
+            )
+        except Exception as exc:
+            log.warning("Failed to write moodle identity file: %s", exc)
 
     log.info("=== New prompt: conversationid=%s, prompt_len=%d ===", conversationid, len(prompt_text))
 
@@ -742,42 +763,65 @@ async def session_prompt(request: Request):
 
 @app.post("/session/permission")
 async def session_permission(request: Request):
-    """Respond to a permission request — approve or reject."""
+    """Respond to a permission request — approve or reject.
+
+    Body fields:
+        permission_id: int  — the JSON-RPC id from session/request_permission
+        outcome: str        — one of "allow_once" (default), "allow_session",
+                              "allow_always", "deny"
+
+    For backwards compatibility, ``approved: true`` maps to ``allow_once``
+    and ``approved: false`` maps to ``deny``.
+    """
     try:
         body = await request.json()
     except Exception:
         body = {}
 
     permission_id = body.get("permission_id")
-    approved = body.get("approved", False)
-
     if permission_id is None:
         return {"status": "error", "message": "permission_id required"}
 
     if not acp.proc or acp.proc.poll() is not None:
         return {"status": "error", "message": "ACP process not running"}
 
-    # Check if this permission request is still pending (not expired/timed out)
     if permission_id not in acp._pending_permissions:
         return {"status": "error", "message": "This permission request has expired — the agent may have timed out or moved on. Please send a new message to continue."}
 
-    # ACP expects RequestPermissionResponse with outcome field:
-    # - Approved: {"outcome": {"outcome": "selected", "optionId": "allow_once"}}
-    # - Rejected: {"outcome": {"outcome": "cancelled"}}
-    if approved:
-        outcome = {"outcome": "selected", "optionId": "allow_once"}
+    # Resolve the outcome: explicit outcome string > approved bool > default
+    outcome_str = body.get("outcome")
+    if outcome_str is None:
+        outcome_str = "allow_once" if body.get("approved", False) else "deny"
+
+    # Validate the outcome against the options the ACP actually offered.
+    # Edit approvals (write_file/patch) only offer allow_once + deny;
+    # sending allow_session/allow_always there would be rejected by the ACP.
+    offered = acp._permission_options.get(permission_id, set())
+    if outcome_str != "deny" and offered and outcome_str not in offered:
+        allowed = ", ".join(sorted(offered - {"deny"})) or "none"
+        return {
+            "status": "error",
+            "message": f"This permission request only supports: {allowed}. "
+                       f"Requested '{outcome_str}' is not available for this tool.",
+        }
+
+    # Map outcome to ACP JSON-RPC result
+    if outcome_str in ("allow_once", "allow_session", "allow_always"):
+        result = {"outcome": {"outcome": "selected", "optionId": outcome_str}}
+        log.info("Permission %s %s by user", permission_id, outcome_str)
     else:
-        outcome = {"outcome": "cancelled"}
+        result = {"outcome": {"outcome": "cancelled"}}
+        log.info("Permission %s denied by user", permission_id)
 
     response = {
         "jsonrpc": "2.0",
         "id": permission_id,
-        "result": {"outcome": outcome},
+        "result": result,
     }
     acp._send_jsonrpc(response)
     acp._pending_permissions.discard(permission_id)
-    log.info("Permission %s %s by user", permission_id, "approved" if approved else "rejected")
-    return {"status": "ok", "approved": approved}
+    acp._permission_options.pop(permission_id, None)
+    return {"status": "ok", "outcome": outcome_str}
 
 
 @app.get("/sessions")

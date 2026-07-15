@@ -436,6 +436,63 @@ else
     echo "  Bridge: NOT running (will auto-start on first chat)"
 fi
 
+# Step 7: Install/update skills and plugins from local_hermes-synapse
+echo ""
+echo "=== Installing/updating synapse skills and plugins ==="
+HERMES_BIN="$VENV_DIR/bin/hermes"
+export HERMES_HOME  # ensure hermes CLI uses the right home, not ~/.hermes
+
+if [ -x "$HERMES_BIN" ]; then
+    # Add skill tap (idempotent — fails silently if already added)
+    "$HERMES_BIN" skills tap add dive4dec/local_hermes-synapse 2>/dev/null || true
+
+    # Install or update moodle-pdf-generation skill (--yes skips interactive confirm)
+    # On first install: installs the skill. On re-run: re-installs over the existing copy,
+    # pulling the latest version from GitHub via the Contents API.
+    "$HERMES_BIN" skills install --yes --force dive4dec/local_hermes-synapse/skills/moodle-pdf-generation 2>/dev/null || true
+    echo "  Skill: moodle-pdf-generation installed/updated"
+
+    # Install dompdf dependency (one-time, pure PHP, platform-independent)
+    # install_deps.sh is idempotent — skips if already installed.
+    if [ ! -f "$HERMES_HOME/lib/dompdf/vendor/autoload.php" ]; then
+        echo "  Installing dompdf v3.1.5..."
+        sh "$HERMES_HOME/skills/moodle-pdf-generation/scripts/install_deps.sh" 2>/dev/null || \
+            echo "  WARNING: dompdf install failed — PDF generation will not work"
+    else
+        echo "  dompdf: already installed"
+    fi
+
+    # Install/update moodle-bridge plugin
+    # NOTE: `hermes plugins install/update` requires git, which is NOT available on Moodle pods.
+    # Download the repo tarball and install manually instead. Always replaces the plugin dir
+    # so the latest version is active after every bootstrap.
+    SYNAPSE_TARBALL="/tmp/local_hermes-synapse.tar.gz"
+    SYNAPSE_EXTRACT="/tmp/local_hermes-synapse-main"
+    echo "  Updating moodle-bridge plugin..."
+    curl -sL "https://github.com/dive4dec/local_hermes-synapse/archive/refs/heads/main.tar.gz" -o "$SYNAPSE_TARBALL"
+    if tar -xzf "$SYNAPSE_TARBALL" -C /tmp/ 2>/dev/null; then
+        mkdir -p "$HERMES_HOME/plugins"
+        rm -rf "$HERMES_HOME/plugins/moodle-bridge"
+        cp -r "$SYNAPSE_EXTRACT/plugins/moodle-bridge" "$HERMES_HOME/plugins/"
+        # Install pip dependencies (PyMySQL required by moodle-bridge)
+        "$VENV_DIR/bin/pip" install PyMySQL 2>/dev/null || true
+        # Enable the plugin
+        "$HERMES_BIN" plugins enable moodle-bridge 2>/dev/null || true
+        echo "  Plugin: moodle-bridge installed/updated"
+    else
+        echo "  WARNING: Failed to download local_hermes-synapse — plugin not updated"
+    fi
+    rm -f "$SYNAPSE_TARBALL"
+    rm -rf "$SYNAPSE_EXTRACT"
+
+    # Set MOODLE_CONFIG_PATH for the plugin
+    if ! grep -q "MOODLE_CONFIG_PATH" "$HERMES_HOME/.env" 2>/dev/null; then
+        echo "MOODLE_CONFIG_PATH=/var/www/html/config.php" >> "$HERMES_HOME/.env"
+    fi
+else
+    echo "  WARNING: hermes binary not found — skipping skill/plugin install"
+fi
+
 echo ""
 echo "=== Bootstrap complete ==="
 echo "HERMES_HOME=$HERMES_HOME"

@@ -216,6 +216,8 @@ function api_stream_response(): void {
         'system_prompt' => $system_prompt,
         'acp_session_id' => $conv->acp_session_id ?? null,
         'messages' => $history,
+        'moodle_username' => $USER->username,
+        'moodle_userid' => $USER->id,
     ];
     
     // CRITICAL: Release session and flush buffers BEFORE any output
@@ -454,7 +456,14 @@ function api_tool_response(): void {
  */
 function api_permission_response(): void {
     $permission_id = required_param('permission_id', PARAM_INT);
-    $approved = required_param('approved', PARAM_BOOL);
+    // outcome param: allow_once | allow_session | allow_always | deny
+    // For backwards compat, approved=1 → allow_once, approved=0 → deny
+    $outcome = optional_param('outcome', '', PARAM_ALPHAEXT);
+    $approved = optional_param('approved', null, PARAM_BOOL);
+
+    if ($outcome === '') {
+        $outcome = $approved ? 'allow_once' : 'deny';
+    }
 
     $bridge_port = local_hermesagent_get_bridge_port();
     $bridge_url = "http://127.0.0.1:$bridge_port/session/permission";
@@ -464,7 +473,7 @@ function api_permission_response(): void {
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode([
             'permission_id' => $permission_id,
-            'approved' => $approved,
+            'outcome' => $outcome,
         ]),
         CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
         CURLOPT_RETURNTRANSFER => true,
@@ -485,7 +494,7 @@ function api_permission_response(): void {
         send_json_response(['status' => 'error', 'message' => $msg]);
     }
 
-    send_json_response(['status' => 'ok', 'approved' => $approved]);
+    send_json_response(['status' => 'ok', 'outcome' => $outcome]);
 }
 
 /**

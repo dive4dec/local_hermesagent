@@ -86,14 +86,11 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             window.location.href = M.cfg.wwwroot + '/local/hermesagent/chat.php?action=new';
         });
 
-        // Tool permission — delegated for inline buttons
-        $(document).on('click', '.hermes-perm-approve', function() {
+        // Tool permission — buttons carry data-outcome
+        $(document).on('click', '.hermes-perm-approve, .hermes-perm-approve-session, .hermes-perm-approve-always, .hermes-perm-reject', function() {
             var $c = $(this).closest('.hermes-perm-actions');
-            handlePermissionResponse($c.data('perm-id'), true, $c);
-        });
-        $(document).on('click', '.hermes-perm-reject', function() {
-            var $c = $(this).closest('.hermes-perm-actions');
-            handlePermissionResponse($c.data('perm-id'), false, $c);
+            var outcome = $(this).data('outcome') || 'allow_once';
+            handlePermissionResponse($c.data('perm-id'), outcome, $c);
         });
 
         // Rename conversation
@@ -605,6 +602,13 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             return;
         }
 
+        // Text-based approval commands (work while a permission prompt is pending)
+        if (message.startsWith('!')) {
+            input.val('');
+            handleApprovalCommand(message);
+            return;
+        }
+
         input.data('lastmessage', message);
         input.val('');
         // Send to DB first to get message ID, then add to UI
@@ -640,11 +644,52 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
                 break;
             case '/help':
                 addSystemMessage('Commands: /stop (abort), /new (new conversation), ' +
-                    '/clear (clear view), /status (bridge health), /help');
+                    '/clear (clear view), /status (bridge health), /help\n' +
+                    'Approval: !approve, !approve session, !approve always, !reject');
                 break;
             default:
                 addSystemMessage('Unknown command: ' + escapeHtml(command) + ' — type /help.');
         }
+    };
+
+    /**
+     * Handle text-based approval commands:
+     *   !approve           → allow_once
+     *   !approve session   → allow_session
+     *   !approve always    → allow_always
+     *   !reject            → deny
+     */
+    var handleApprovalCommand = function(cmd) {
+        var parts = cmd.trim().toLowerCase().split(/\s+/);
+        var command = parts[0];
+        var modifier = parts[1] || '';
+
+        var outcome;
+        if (command === '!approve') {
+            if (modifier === 'session') {
+                outcome = 'allow_session';
+            } else if (modifier === 'always') {
+                outcome = 'allow_always';
+            } else {
+                outcome = 'allow_once';
+            }
+        } else if (command === '!reject') {
+            outcome = 'deny';
+        } else {
+            addSystemMessage('Unknown approval command. Use: !approve, !approve session, ' +
+                '!approve always, or !reject');
+            return;
+        }
+
+        // Find the most recent pending permission prompt
+        var $pending = $('.hermes-perm-actions').last();
+        if (!$pending.length) {
+            addSystemMessage('No pending permission request to approve/reject.');
+            return;
+        }
+
+        var permId = $pending.data('perm-id');
+        handlePermissionResponse(permId, outcome, $pending);
     };
 
     var stopStreaming = function() {
@@ -795,15 +840,17 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         }
         html += '<div class="hermes-perm-prompt">Approve this action?</div>' +
             '<div class="hermes-perm-actions" data-perm-id="' + permId + '">' +
-            '<button class="btn btn-success btn-sm hermes-perm-approve">Approve</button> ' +
-            '<button class="btn btn-danger btn-sm hermes-perm-reject">Reject</button>' +
+            '<button class="btn btn-success btn-sm hermes-perm-approve" data-outcome="allow_once">Approve</button> ' +
+            '<button class="btn btn-success btn-sm hermes-perm-approve-session" data-outcome="allow_session">Approve session</button> ' +
+            '<button class="btn btn-success btn-sm hermes-perm-approve-always" data-outcome="allow_always">Approve always</button> ' +
+            '<button class="btn btn-danger btn-sm hermes-perm-reject" data-outcome="deny">Reject</button>' +
             '</div></div></div>';
 
         $('#hermes-chat-area').append(html);
         scrollToEnd();
     };
 
-    var handlePermissionResponse = function(permId, approved, $btnContainer) {
+    var handlePermissionResponse = function(permId, outcome, $btnContainer) {
         if (permId === null || permId === undefined) return;
 
         $btnContainer.find('button').prop('disabled', true);
@@ -814,15 +861,22 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             data: {
                 sesskey: config.sesskey,
                 permission_id: permId,
-                approved: approved ? 1 : 0
+                outcome: outcome
             }
         }).done(function(resp) {
             if (resp && resp.status === 'error') {
                 $btnContainer.html('<span class="text-danger">⚠ ' +
                     escapeHtml(resp.message || 'Permission request failed') + '</span>');
             } else {
-                $btnContainer.html('<span class="text-' + (approved ? 'success' : 'danger') + '">' +
-                    (approved ? '✓ Approved' : '✗ Rejected') + '</span>');
+                var labels = {
+                    'allow_once': '✓ Approved',
+                    'allow_session': '✓ Approved for session',
+                    'allow_always': '✓ Approved always',
+                    'deny': '✗ Rejected'
+                };
+                var cls = outcome === 'deny' ? 'danger' : 'success';
+                $btnContainer.html('<span class="text-' + cls + '">' +
+                    (labels[outcome] || '✓ Done') + '</span>');
             }
             scrollToEnd();
         }).fail(function(ex) {

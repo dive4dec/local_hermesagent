@@ -260,6 +260,13 @@ function api_stream_response(): void {
             // Parse SSE data — new bridge format matches what we expect
             $lines = explode("\n", $data);
             foreach ($lines as $line) {
+                // Forward SSE keepalive comments to keep browser↔nginx alive
+                // during long waits (e.g. permission approval).
+                if (strpos($line, ': keepalive') === 0) {
+                    echo ": keepalive\n\n";
+                    flush();
+                    continue;
+                }
                 // Handle event: type lines
                 if (strpos($line, 'event: ') === 0) {
                     $event_type = substr($line, 7);

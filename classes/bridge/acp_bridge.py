@@ -330,6 +330,7 @@ class ACPProcess:
         accumulated_text = ""
         accumulated_reasoning = ""
         done = False
+        last_keepalive = 0.0  # monotonic timestamp of last keepalive sent
 
         while not done:
             if self.proc.poll() is not None:
@@ -351,9 +352,17 @@ class ACPProcess:
                 # Check abort during the 0.5s wait gap
                 if abort_event and abort_event.is_set():
                     self._pending_permissions.clear()
+                    self._permission_options.clear()
                     return
+                # Send SSE keepalive comment while waiting (e.g. during permission
+                # approval).  Without this, the K8s ingress proxy_read_timeout
+                # (60s default) kills the idle connection → "Connection error".
+                if self._pending_permissions:
+                    now = time.monotonic()
+                    if now - last_keepalive >= 15:
+                        last_keepalive = now
+                        yield {"type": "keepalive"}
                 continue
-
             # Skip messages for other requests
             msg_id = msg.get("id")
             method = msg.get("method")
@@ -661,7 +670,14 @@ async def session_prompt(request: Request):
                     return
 
                 event_type = event.get("type", "unknown")
-                log.info("Event type: %s", event_type)
+                log.debug("Event type: %s", event_type)
+
+                if event_type == "keepalive":
+                    # SSE comment — keeps the connection alive through K8s ingress
+                    # proxy_read_timeout (60s default) during long waits (e.g. permission
+                    # approval).  Comments are ignored by EventSource listeners.
+                    yield ": keepalive\n\n"
+                    continue
 
                 if event_type == "message":
                     text = event.get("delta", "")

@@ -190,9 +190,13 @@
         }
     });
 
-    // Click to focus
-    configEl.addEventListener('click', function() {
-        inputEl.focus();
+    // Click to focus input — but only if the click is NOT in the output area
+    // (so text selection in the output works normally)
+    configEl.addEventListener('click', function(e) {
+        if (e.target.id !== 'hermes-terminal-output' &&
+            !e.target.closest('#hermes-terminal-output')) {
+            inputEl.focus();
+        }
     });
 
     // Bootstrap button

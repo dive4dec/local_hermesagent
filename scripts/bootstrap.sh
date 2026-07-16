@@ -462,42 +462,76 @@ if [ -x "$HERMES_BIN" ]; then
         echo "  dompdf: already installed"
     fi
 
-    # Install/update moodle-bridge plugin
+    # Install/update ALL plugins from local_hermes-synapse repo
     # git + openssh-client are available in the phpfpm Docker image, so
-    # `hermes plugins install/update` works natively via git clone.
+    # `hermes plugins install` works natively via git clone.
     # Falls back to tarball download if git is unavailable or clone fails.
-    SYNAPSE_PLUGIN_ID="dive4dec/local_hermes-synapse/plugins/moodle-bridge"
-    PLUGIN_INSTALLED_VIA_GIT=false
+    #
+    # The repo may contain multiple plugins under plugins/<name>/.
+    # We discover them by cloning the repo once, listing subdirectories that
+    # contain a plugin.yaml, and installing each one individually.
+    SYNAPSE_REPO="dive4dec/local_hermes-synapse"
+    SYNAPSE_TARBALL="/tmp/local_hermes-synapse.tar.gz"
+    SYNAPSE_EXTRACT="/tmp/local_hermes-synapse-main"
+    PLUGIN_NAMES=""
+
+    # --- Try git-first: clone once, discover all plugins, install each ---
     if command -v git >/dev/null 2>&1; then
-        echo "  Updating moodle-bridge plugin via git..."
-        if "$HERMES_BIN" plugins install --force --enable "$SYNAPSE_PLUGIN_ID" 2>/dev/null; then
-            echo "  Plugin: moodle-bridge installed/updated via git"
-            PLUGIN_INSTALLED_VIA_GIT=true
-        else
-            echo "  Git install failed, trying tarball fallback..."
+        rm -rf "$SYNAPSE_EXTRACT"
+        git clone --depth 1 "https://github.com/${SYNAPSE_REPO}.git" "$SYNAPSE_EXTRACT" 2>/dev/null
+        if [ -d "$SYNAPSE_EXTRACT/plugins" ]; then
+            for plugin_dir in "$SYNAPSE_EXTRACT"/plugins/*/; do
+                [ -f "${plugin_dir}plugin.yaml" ] || continue
+                plugin_name=$(basename "$plugin_dir")
+                PLUGIN_NAMES="$PLUGIN_NAMES $plugin_name"
+                echo "  Installing plugin: $plugin_name (via git)..."
+                if "$HERMES_BIN" plugins install --force --enable "${SYNAPSE_REPO}/plugins/${plugin_name}" 2>/dev/null; then
+                    echo "  Plugin: $plugin_name installed/updated via git"
+                else
+                    echo "  WARNING: git install failed for $plugin_name, using tarball copy"
+                    rm -rf "$HERMES_HOME/plugins/$plugin_name"
+                    cp -r "$plugin_dir" "$HERMES_HOME/plugins/"
+                fi
+            done
         fi
+        rm -rf "$SYNAPSE_EXTRACT"
     fi
-    # Tarball fallback: works without git credentials, always available
-    if [ "$PLUGIN_INSTALLED_VIA_GIT" = "false" ]; then
-        echo "  Installing moodle-bridge via tarball fallback..."
-        SYNAPSE_TARBALL="/tmp/local_hermes-synapse.tar.gz"
-        SYNAPSE_EXTRACT="/tmp/local_hermes-synapse-main"
-        curl -sL "https://github.com/dive4dec/local_hermes-synapse/archive/refs/heads/main.tar.gz" -o "$SYNAPSE_TARBALL"
+
+    # --- Tarball fallback: if git clone failed or git not available ---
+    if [ -z "$PLUGIN_NAMES" ]; then
+        echo "  Git unavailable or failed — using tarball fallback..."
+        curl -sL "https://github.com/${SYNAPSE_REPO}/archive/refs/heads/main.tar.gz" -o "$SYNAPSE_TARBALL"
         if tar -xzf "$SYNAPSE_TARBALL" -C /tmp/ 2>/dev/null; then
-            mkdir -p "$HERMES_HOME/plugins"
-            rm -rf "$HERMES_HOME/plugins/moodle-bridge"
-            cp -r "$SYNAPSE_EXTRACT/plugins/moodle-bridge" "$HERMES_HOME/plugins/"
-            echo "  Plugin: moodle-bridge installed via tarball"
+            for plugin_dir in "$SYNAPSE_EXTRACT"/plugins/*/; do
+                [ -f "${plugin_dir}plugin.yaml" ] || continue
+                plugin_name=$(basename "$plugin_dir")
+                PLUGIN_NAMES="$PLUGIN_NAMES $plugin_name"
+                echo "  Installing plugin: $plugin_name (via tarball)..."
+                rm -rf "$HERMES_HOME/plugins/$plugin_name"
+                cp -r "$plugin_dir" "$HERMES_HOME/plugins/"
+                echo "  Plugin: $plugin_name installed via tarball"
+            done
         else
-            echo "  WARNING: Failed to download local_hermes-synapse — plugin not updated"
+            echo "  WARNING: Failed to download $SYNAPSE_REPO — no plugins installed"
         fi
         rm -f "$SYNAPSE_TARBALL"
         rm -rf "$SYNAPSE_EXTRACT"
     fi
-    # Install pip dependencies (PyMySQL required by moodle-bridge)
-    "$HERMES_HOME/venv/bin/pip" install PyMySQL 2>/dev/null || true
-    # Enable the plugin (idempotent — works for both git and tarball installs)
-    "$HERMES_BIN" plugins enable moodle-bridge 2>/dev/null || true
+
+    # Install pip dependencies declared in each plugin's plugin.yaml
+    for plugin_name in $PLUGIN_NAMES; do
+        plugin_yaml="$HERMES_HOME/plugins/$plugin_name/plugin.yaml"
+        if [ -f "$plugin_yaml" ]; then
+            # Extract pip_dependencies entries and install them
+            while IFS= read -r dep; do
+                [ -z "$dep" ] && continue
+                echo "  Installing pip dependency: $dep (for $plugin_name)"
+                "$HERMES_HOME/venv/bin/pip" install "$dep" 2>/dev/null || true
+            done < <(sed -n '/^pip_dependencies:/,/^[^ ]/p' "$plugin_yaml" | grep '^  - ' | sed 's/^  - //')
+        fi
+        # Enable the plugin (idempotent — works for both git and tarball installs)
+        "$HERMES_BIN" plugins enable "$plugin_name" 2>/dev/null || true
+    done
 
     # Set MOODLE_CONFIG_PATH for the plugin
     if ! grep -q "MOODLE_CONFIG_PATH" "$HERMES_HOME/.env" 2>/dev/null; then

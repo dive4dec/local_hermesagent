@@ -256,109 +256,129 @@ function api_stream_response(): void {
             static $reasoning_content = '';
             static $message_id = null;
             static $acp_session_saved = false;
+            static $sse_buffer = '';
+            static $event_type = '';
             
-            // Parse SSE data — new bridge format matches what we expect
-            $lines = explode("\n", $data);
-            foreach ($lines as $line) {
+            // Append to buffer and process complete SSE events (delimited by \n\n).
+            // curl WRITEFUNCTION delivers data in arbitrary chunks; a large SSE
+            // event (e.g. permission request with full file diff) can span multiple
+            // calls. Without buffering, json_decode() fails on the partial JSON
+            // and the event is silently lost.
+            $sse_buffer .= $data;
+            
+            // Process complete events (split on blank line = \n\n)
+            while (($pos = strpos($sse_buffer, "\n\n")) !== false) {
+                $raw_event = substr($sse_buffer, 0, $pos);
+                $sse_buffer = substr($sse_buffer, $pos + 2);
+                
+                $lines = explode("\n", $raw_event);
+                $event_type = '';
+                $payload = '';
+                foreach ($lines as $line) {
+                    if (strpos($line, ': keepalive') === 0) {
+                        $event_type = 'keepalive';
+                    } elseif (strpos($line, 'event: ') === 0) {
+                        $event_type = substr($line, 7);
+                    } elseif (strpos($line, 'data: ') === 0) {
+                        $payload = substr($line, 6);
+                    }
+                }
+                
                 // Forward SSE keepalive comments to keep browser↔nginx alive
-                // during long waits (e.g. permission approval).
-                if (strpos($line, ': keepalive') === 0) {
+                if ($event_type === 'keepalive') {
                     echo ": keepalive\n\n";
                     flush();
                     continue;
                 }
-                // Handle event: type lines
-                if (strpos($line, 'event: ') === 0) {
-                    $event_type = substr($line, 7);
+                
+                if ($payload === '') continue;
+                $json = json_decode($payload, true);
+                if (!$json) {
+                    _hermes_log("[$req_id] WARNING: json_decode failed for event_type=$event_type payload_len=" . strlen($payload));
                     continue;
                 }
-                if (strpos($line, 'data: ') === 0) {
-                    $payload = substr($line, 6);
-                    $json = json_decode($payload, true);
-                    if (!$json) continue;
-                    
-                    // Save the ACP session ID to DB on first chunk (once per stream)
-                    if (!$acp_session_saved && !empty($json['session_id'])) {
-                        $acp_session_saved = true;
-                        $upd = new stdClass();
-                        $upd->id = $conversationid;
-                        $upd->acp_session_id = $json['session_id'];
-                        $DB->update_record('local_hermesagent_conversations', $upd);
-                    }
-                    
-                    $dl = strlen($json['delta'] ?? '');
-                    $rl = strlen($json['reasoning'] ?? '');
-                    $etype = $json['type'] ?? 'unknown';
-                    _hermes_log("[$req_id] CHUNK type=$etype delta=$dl reasoning=$rl");
-                    
-                    // Handle message events (content chunks)
-                    if ($etype === 'message') {
-                        $chunk = $json['delta'] ?? '';
-                        $full = $json['full'] ?? '';
-                        $assistant_content .= $chunk;
-                        echo "event: message\ndata: " . json_encode(['delta' => $chunk, 'full' => $full, 'type' => 'message']) . "\n\n";
-                        flush();
-                    }
-                    
-                    // Handle reasoning events
-                    if ($etype === 'reasoning') {
-                        $chunk = $json['delta'] ?? '';
-                        $full = $json['full'] ?? '';
-                        $reasoning_content .= $chunk;
-                        echo "event: message\ndata: " . json_encode(['delta' => $chunk, 'full' => $full, 'type' => 'reasoning']) . "\n\n";
-                        flush();
-                    }
-                    
-                    // Handle permission events — forward to browser
-                    if ($etype === 'permission') {
-                        $perm_data = [
-                            'type' => 'permission',
-                            'permission_id' => $json['permission_id'] ?? null,
-                            'title' => $json['title'] ?? 'Unknown tool',
-                            'description' => $json['description'] ?? '',
-                            'kind' => $json['kind'] ?? 'execute',
-                        ];
-                        echo "event: permission\ndata: " . json_encode($perm_data) . "\n\n";
-                        flush();
-                    }
-                    
-                    // Handle tool_call events — forward to browser so user can
-                    // see what tools the agent is using (e.g. moodle_upload_file
-                    // results with download links).
-                    if ($etype === 'tool_call') {
-                        echo "event: tool_call\ndata: " . json_encode($json) . "\n\n";
-                        flush();
-                    }
+                
+                // Save the ACP session ID to DB on first chunk (once per stream)
+                if (!$acp_session_saved && !empty($json['session_id'])) {
+                    $acp_session_saved = true;
+                    $upd = new stdClass();
+                    $upd->id = $conversationid;
+                    $upd->acp_session_id = $json['session_id'];
+                    $DB->update_record('local_hermesagent_conversations', $upd);
+                }
+                
+                $dl = strlen($json['delta'] ?? '');
+                $rl = strlen($json['reasoning'] ?? '');
+                $etype = $json['type'] ?? 'unknown';
+                _hermes_log("[$req_id] CHUNK type=$etype delta=$dl reasoning=$rl");
+                
+                // Handle message events (content chunks)
+                if ($etype === 'message') {
+                    $chunk = $json['delta'] ?? '';
+                    $full = $json['full'] ?? '';
+                    $assistant_content .= $chunk;
+                    echo "event: message\ndata: " . json_encode(['delta' => $chunk, 'full' => $full, 'type' => 'message']) . "\n\n";
+                    flush();
+                }
+                
+                // Handle reasoning events
+                if ($etype === 'reasoning') {
+                    $chunk = $json['delta'] ?? '';
+                    $full = $json['full'] ?? '';
+                    $reasoning_content .= $chunk;
+                    echo "event: message\ndata: " . json_encode(['delta' => $chunk, 'full' => $full, 'type' => 'reasoning']) . "\n\n";
+                    flush();
+                }
+                
+                // Handle permission events — forward to browser
+                if ($etype === 'permission') {
+                    $perm_data = [
+                        'type' => 'permission',
+                        'permission_id' => $json['permission_id'] ?? null,
+                        'title' => $json['title'] ?? 'Unknown tool',
+                        'description' => $json['description'] ?? '',
+                        'kind' => $json['kind'] ?? 'execute',
+                    ];
+                    echo "event: permission\ndata: " . json_encode($perm_data) . "\n\n";
+                    flush();
+                }
+                
+                // Handle tool_call events — forward to browser so user can
+                // see what tools the agent is using (e.g. moodle_upload_file
+                // results with download links).
+                if ($etype === 'tool_call') {
+                    echo "event: tool_call\ndata: " . json_encode($json) . "\n\n";
+                    flush();
+                }
 
-                    // Handle done event
-                    if ($etype === 'done') {
-                        _hermes_log("[$req_id] DONE - assistant=" . strlen($assistant_content) . " reasoning=" . strlen($reasoning_content));
-                        
-                        // Safety net: if no content but reasoning exists, use reasoning
-                        if (trim($assistant_content) === '' && !empty($reasoning_content)) {
-                            _hermes_log("[$req_id] SAFETY NET: using reasoning as answer");
-                            $assistant_content = $reasoning_content;
-                        }
-                        
-                        // Save to DB
-                        if ($assistant_content && $message_id === null) {
-                            $rec = new stdClass();
-                            $rec->conversationid = $conversationid;
-                            $rec->role = 'assistant';
-                            $rec->content = $assistant_content;
-                            $rec->timemodified = time();
-                            $message_id = $DB->insert_record('local_hermesagent_messages', $rec);
-                        } elseif ($assistant_content && $message_id) {
-                            $rec = $DB->get_record('local_hermesagent_messages', ['id' => $message_id]);
-                            if ($rec) {
-                                $rec->content = $assistant_content;
-                                $DB->update_record('local_hermesagent_messages', $rec);
-                            }
-                        }
-                        
-                        flush();
-                        return strlen($data);
+                // Handle done event
+                if ($etype === 'done') {
+                    _hermes_log("[$req_id] DONE - assistant=" . strlen($assistant_content) . " reasoning=" . strlen($reasoning_content));
+                    
+                    // Safety net: if no content but reasoning exists, use reasoning
+                    if (trim($assistant_content) === '' && !empty($reasoning_content)) {
+                        _hermes_log("[$req_id] SAFETY NET: using reasoning as answer");
+                        $assistant_content = $reasoning_content;
                     }
+                    
+                    // Save to DB
+                    if ($assistant_content && $message_id === null) {
+                        $rec = new stdClass();
+                        $rec->conversationid = $conversationid;
+                        $rec->role = 'assistant';
+                        $rec->content = $assistant_content;
+                        $rec->timemodified = time();
+                        $message_id = $DB->insert_record('local_hermesagent_messages', $rec);
+                    } elseif ($assistant_content && $message_id) {
+                        $rec = $DB->get_record('local_hermesagent_messages', ['id' => $message_id]);
+                        if ($rec) {
+                            $rec->content = $assistant_content;
+                            $DB->update_record('local_hermesagent_messages', $rec);
+                        }
+                    }
+                    
+                    flush();
+                    return strlen($data);
                 }
             }
             

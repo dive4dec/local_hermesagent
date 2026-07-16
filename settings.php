@@ -79,6 +79,50 @@ if ($hassiteconfig) {
     $links_html .= '<td>Full Hermes web UI — configure model/provider, browse sessions, manage MCP servers and toolsets, and set up messaging platforms. Opens in a new tab.</td></tr>';
     $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/settings_action.php?action=update&sesskey=' . sesskey() . '" class="btn btn-warning"><i class="icon fa fa-download"></i> Update &amp; Bootstrap</a></td>';
     $links_html .= '<td>Install or update the Hermes Python environment, bridge scripts, and MCP servers. Safe to run repeatedly (idempotent). Also repairs the installation if something is broken.</td></tr>';
+
+    // Bootstrap status row
+    $bootstrap_log = "$hermes_home/bootstrap_update.log";
+    $bootstrap_running = false;
+    exec("ps aux 2>/dev/null | grep 'bootstrap.sh' | grep -v grep", $ps_out, $ps_rc);
+    if (!empty($ps_out)) {
+        $bootstrap_running = true;
+    }
+    if ($bootstrap_running) {
+        $bootstrap_status = '<span class="text-warning"><i class="icon fa fa-spinner fa-spin"></i> Running...</span>';
+    } elseif (file_exists($bootstrap_log)) {
+        $log_content = file_get_contents($bootstrap_log, false, null, -1, 200000); // last 200KB
+        if ($log_content === false) { $log_content = ''; }
+        $log_mtime = filemtime($bootstrap_log);
+        $time_ago = time() - $log_mtime;
+        if ($time_ago < 60) {
+            $time_str = $time_ago . 's ago';
+        } elseif ($time_ago < 3600) {
+            $time_str = floor($time_ago / 60) . 'm ago';
+        } else {
+            $time_str = date('M j, H:i', $log_mtime);
+        }
+        $completed = (strpos($log_content, '=== Bootstrap complete ===') !== false);
+        $errored = (strpos($log_content, '=== Bootstrap') === false && $time_ago < 3600 && !$completed);
+        if ($completed) {
+            $bootstrap_status = '<span class="text-success"><i class="icon fa fa-check"></i> Completed (' . $time_str . ')</span>';
+        } elseif ($errored) {
+            $bootstrap_status = '<span class="text-danger"><i class="icon fa fa-exclamation-triangle"></i> Incomplete (' . $time_str . ')</span>';
+        } else {
+            $bootstrap_status = '<span class="text-secondary">Last run: ' . $time_str . '</span>';
+        }
+        // Show last 3 lines of log
+        $log_lines = explode("\n", trim($log_content));
+        $last_lines = array_slice($log_lines, -3);
+        $last_lines = array_filter($last_lines, fn($l) => trim($l) !== '');
+        if (!empty($last_lines)) {
+            $log_preview = htmlspecialchars(implode("\n", $last_lines));
+            $bootstrap_status .= '<br><pre style="font-size:11px;background:#f8f9fa;padding:6px;border-radius:4px;margin-top:4px;max-height:80px;overflow:auto;white-space:pre-wrap;">' . $log_preview . '</pre>';
+        }
+    } else {
+        $bootstrap_status = '<span class="text-secondary">Never run</span>';
+    }
+    $links_html .= '<tr><td>Bootstrap Status</td><td>' . $bootstrap_status . '</td></tr>';
+
     $links_html .= '<tr><td><a href="' . $hermes_docs . '" target="_blank" class="btn btn-link"><i class="icon fa fa-book"></i> Docs</a></td>';
     $links_html .= '<td>Official Hermes Agent documentation — configuration reference, gateway setup guides, and API docs.</td></tr>';
     $links_html .= '</table>';

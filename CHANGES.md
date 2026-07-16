@@ -5,6 +5,29 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.4.4] — 2026-07-16
+
+### Fixed
+
+#### SSE buffer for large permission events (critical)
+- **Permission requests for large file edits were silently dropped** — curl's
+  `WRITEFUNCTION` delivers data in arbitrary chunks. When the ACP bridge sent
+  a large SSE event (e.g. a permission request containing the full
+  `config.yaml` diff — 16KB+), curl split it across two calls (16378 + 8480
+  bytes). The old code called `json_decode()` on each chunk independently,
+  which returned `null` on the partial JSON, and `if (!$json) continue;`
+  silently dropped the permission event. The browser never saw the
+  Approve/Reject buttons, and the ACP subprocess hung sending keepalives
+  until the 600-second stream timeout.
+- **Fix: static `$sse_buffer`** accumulates incoming data across curl calls.
+  The parser only processes complete SSE events (delimited by `\n\n`),
+  ensuring `json_decode()` always receives the full JSON payload. Added
+  warning log when `json_decode` fails on a complete event.
+- This was the root cause of the recurring "stuck chat" issue whenever the
+  agent tried to patch a large file (config.yaml, chat.js, etc.).
+
+---
+
 ## [0.4.3] — 2026-07-15
 
 ### Added

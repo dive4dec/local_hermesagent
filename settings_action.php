@@ -62,16 +62,16 @@ switch ($action) {
     case 'update':
         // Run bootstrap.sh to install/update Hermes venv + bridge + MCP scripts.
         // Plugin code updates come from the host via `make sync`, not git pull.
+        // Run in background so the HTTP request returns immediately — bootstrap
+        // takes minutes (git clone, pip install, etc.) which would exceed
+        // nginx/ingress timeouts and cause ERR_CONNECTION_ABORTED.
         $bootstrap_script = escapeshellarg(__DIR__ . '/scripts/bootstrap.sh');
+        $log_file = escapeshellarg($hermes_home . '/bootstrap_update.log');
         $env = 'HERMES_HOME=' . escapeshellarg($hermes_home);
-        $cmd = $env . ' sh ' . $bootstrap_script . ' 2>&1';
-        exec($cmd, $output, $ret);
-        $output_str = implode("\n", $output);
-        if ($ret === 0) {
-            $message = 'Bootstrap complete: ' . $output_str;
-        } else {
-            $message = 'Bootstrap errors (exit ' . $ret . '): ' . $output_str;
-        }
+        $cmd = $env . ' sh ' . $bootstrap_script . ' > ' . $log_file . ' 2>&1 &';
+        exec($cmd);
+        $message = 'Update started in background. Check the bridge status below or see '
+            . $hermes_home . '/bootstrap_update.log for details.';
         break;
 
     default:

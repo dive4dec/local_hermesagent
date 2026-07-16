@@ -90,7 +90,8 @@ if ($hassiteconfig) {
     if ($bootstrap_running) {
         $bootstrap_status = '<span class="text-warning"><i class="icon fa fa-spinner fa-spin"></i> Running...</span>';
     } elseif (file_exists($bootstrap_log)) {
-        $log_content = file_get_contents($bootstrap_log, false, null, -1, 200000); // last 200KB
+        // Read the log file. It's typically small (<50KB), so read it all.
+        $log_content = file_get_contents($bootstrap_log);
         if ($log_content === false) { $log_content = ''; }
         $log_mtime = filemtime($bootstrap_log);
         $time_ago = time() - $log_mtime;

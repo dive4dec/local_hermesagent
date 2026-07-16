@@ -503,6 +503,13 @@ if [ -x "$HERMES_BIN" ]; then
     if ! grep -q "MOODLE_CONFIG_PATH" "$HERMES_HOME/.env" 2>/dev/null; then
         echo "MOODLE_CONFIG_PATH=/var/www/html/config.php" >> "$HERMES_HOME/.env"
     fi
+
+    # Fix ownership: hermes plugins/skills install may have created root-owned
+    # files (when bootstrap is run via kubectl exec as root). The bridge and
+    # Moodle dashboard run as www-data, so everything must be www-data-owned.
+    if command -v chown >/dev/null 2>&1; then
+        chown -R www-data:www-data "$HERMES_HOME/plugins" "$HERMES_HOME/skills" "$HERMES_HOME/lib" "$HERMES_HOME/.env" 2>/dev/null || true
+    fi
 else
     echo "  WARNING: hermes binary not found — skipping skill/plugin install"
 fi

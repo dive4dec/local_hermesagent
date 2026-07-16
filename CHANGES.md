@@ -5,6 +5,56 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.5.0] — 2026-07-16
+
+### Added
+
+#### Bootstrap status on settings page
+- Settings page now shows bootstrap status: **Running**, **Completed**, or
+  **Incomplete**, with timestamp and last 3 log lines.
+- Detects running state via `ps aux | grep bootstrap.sh`.
+- Detects completion by checking for `=== Bootstrap complete ===` marker in
+  `bootstrap_update.log`.
+
+#### Background bootstrap execution
+- `settings_action.php` now runs `bootstrap.sh` in the background (`&`) with
+  output redirected to `bootstrap_update.log`.
+- Returns immediately to avoid nginx/ingress HTTP timeouts (bootstrap takes
+  minutes for git clone, pip install, etc.).
+
+#### Bootstrap installs ALL plugins from synapse repo
+- `bootstrap.sh` now discovers all plugins in `local_hermes-synapse` by
+  cloning the repo once and scanning `plugins/*/` for `plugin.yaml`.
+- Installs each plugin individually via `hermes plugins install` with the
+  correct subdir path (e.g.,
+  `dive4dec/local_hermes-synapse/plugins/moodle-bridge`).
+- Falls back to tarball copy per-plugin if git install fails.
+- Reads `pip_dependencies` from each `plugin.yaml` and installs them.
+- New plugins added to the repo are automatically installed on next bootstrap
+  — no script changes needed.
+
+#### Git-first plugin install with tarball fallback
+- `bootstrap.sh` uses `hermes plugins install` (git clone) as primary install
+  method, with tarball download as fallback when git is unavailable.
+- Requires git + openssh-client in the phpfpm Docker image (added in e-quiz
+  v0.4.0).
+
+### Fixed
+
+#### Bootstrap status always showed "Incomplete"
+- `file_get_contents()` with `offset=-1` returns only 1 byte (`"\n"`) — PHP
+  does not support negative offsets. The code never found the
+  `=== Bootstrap complete ===` marker and always fell through to the
+  `$errored` branch.
+- Fixed by reading the whole file (typically <5KB).
+
+#### Ownership after plugin/skill install
+- `hermes plugins install` and `hermes skills install` run as root when
+  bootstrap is triggered via `kubectl exec`, creating root-owned files.
+- Added `chown -R www-data:www-data` safety net after all install steps.
+
+---
+
 ## [0.4.4] — 2026-07-16
 
 ### Fixed

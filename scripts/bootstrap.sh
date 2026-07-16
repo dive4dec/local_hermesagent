@@ -463,9 +463,9 @@ if [ -x "$HERMES_BIN" ]; then
     fi
 
     # Install/update moodle-bridge plugin
-    # NOTE: `hermes plugins install/update` requires git, which is NOT available on Moodle pods.
-    # Download the repo tarball and install manually instead. Always replaces the plugin dir
-    # so the latest version is active after every bootstrap.
+    # git + openssh-client are available in the phpfpm Docker image, so
+    # `hermes plugins install/update` works natively. The tarball approach
+    # below is kept as a robust fallback that doesn't depend on git credentials.
     SYNAPSE_TARBALL="/tmp/local_hermes-synapse.tar.gz"
     SYNAPSE_EXTRACT="/tmp/local_hermes-synapse-main"
     echo "  Updating moodle-bridge plugin..."

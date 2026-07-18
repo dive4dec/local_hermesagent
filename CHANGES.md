@@ -5,6 +5,20 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.5.1] — 2026-07-18
+
+### Fixed
+
+#### Bootstrap never started on first install
+- `settings_action.php` redirected bootstrap output to
+  `$hermes_home/bootstrap_update.log`, but `.hermes/` doesn't exist on first
+  install. The shell silently failed to create the log file in a nonexistent
+  directory, so bootstrap never started and the settings page showed
+  "Never run".
+- Fix: `mkdir($hermes_home, 0777, true)` before the `exec()`.
+
+---
+
 ## [0.5.0] — 2026-07-16
 
 ### Added

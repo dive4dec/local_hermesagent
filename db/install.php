@@ -2,7 +2,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 function xmldb_local_hermesagent_install(): bool {
-    global $DB;
+    global $DB, $CFG;
 
     if (!$DB->get_manager()->table_exists('local_hermesagent_settings')) {
         return true;
@@ -26,6 +26,13 @@ function xmldb_local_hermesagent_install(): bool {
             ]);
         }
     }
+
+    // Purge all caches so the AMD modules (amd/build/*.min.js) are picked up
+    // by requirejs on the next page load. Without this, Moodle may serve a
+    // stale JS bundle that doesn't include local_hermesagent/chat, causing
+    // "No define call for local_hermesagent/chat" and a non-functional chat
+    // page (send button does nothing).
+    purge_all_caches();
 
     return true;
 }

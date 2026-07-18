@@ -5,6 +5,40 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.5.2] — 2026-07-18
+
+### Fixed
+
+#### Chat page non-functional after zip install (stale JS cache)
+- When the plugin is installed via Moodle's zip upload, the AMD module
+  `local_hermesagent/chat` was not included in Moodle's requirejs bundle.
+  The browser got "No define call for local_hermesagent/chat" and the send
+  button did nothing.
+- Root cause: `db/install.php` did not purge caches. Moodle's post-install
+  redirect to `admin/index.php?cache=0` purges caches, but the requirejs
+  cache can be rebuilt from stale state if web requests race with the
+  install process.
+- Fix: `db/install.php` now calls `purge_all_caches()` at the end of
+  installation. `db/upgrade.php` also calls it on every version bump via
+  a new savepoint (2026071604).
+
+#### Bootstrap never runs as root
+- `bootstrap.sh` now detects if it is running as root (e.g. via
+  `kubectl exec`) and re-executes itself as `www-data` using `su`.
+- All files created during bootstrap (venv, config.yaml, .env, plugins,
+  skills) are now www-data-owned from creation, preventing the "Could not
+  save setting" error on the settings page.
+
+#### ACP Bridge fails to start (missing agent-client-protocol)
+- `bootstrap.sh` installed `hermes-agent` without the `[acp]` extra.
+  The ACP bridge spawns `hermes acp` which requires
+  `agent-client-protocol==0.9.0`. Without it, the subprocess exits
+  immediately with "ACP dependencies not installed".
+- Fix: bootstrap now installs `hermes-agent[acp]` (both pinned and latest
+  version branches).
+
+---
+
 ## [0.5.1] — 2026-07-18
 
 ### Fixed

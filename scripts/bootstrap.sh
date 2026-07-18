@@ -12,9 +12,35 @@
 # Usage:
 #   bootstrap.sh              # install/upgrade to latest hermes-agent
 #   bootstrap.sh 0.17.0       # install specific hermes-agent version
+#
+# IMPORTANT: This script NEVER runs as root. If invoked as root (e.g. via
+# `kubectl exec` which defaults to root), it re-executes itself as www-data
+# using `su`. This ensures all created files (config.yaml, .env, venv, etc.)
+# are www-data-owned from the start, so the PHP-FPM settings page can write
+# to config.yaml/.env and the bridge can read them.
 
 HERMES_HOME="${HERMES_HOME:-/var/www/moodledata/.hermes}"
 PLUGIN_DIR="${PLUGIN_DIR:-$(dirname "$(dirname "$0")")}"
+
+# --- Never run as root: re-exec as www-data ---
+# PHP-FPM, the bridge, and the Moodle settings page all run as www-data.
+# If bootstrap runs as root (kubectl exec defaults to root), all files it
+# creates (venv, config.yaml, .env, plugins, skills) will be root-owned,
+# breaking the settings page (file_put_contents fails on root-owned files)
+# and forcing a chown cleanup afterwards. Re-exec as www-data up front so
+# every file is owned by www-data from creation.
+if [ "$(id -u)" = "0" ]; then
+    TARGET_USER="www-data"
+    # Ensure HERMES_HOME exists and is www-data-owned before su (su may not
+    # have permission to create it as www-data if the parent isn't writable).
+    mkdir -p "$HERMES_HOME"
+    chown "$TARGET_USER:$TARGET_USER" "$HERMES_HOME" 2>/dev/null || true
+    echo "=== Re-executing as $TARGET_USER (was root) ==="
+    # Paths don't contain single quotes, so single-quote expansion is safe.
+    # $1 (optional version pin) is either empty or a safe version string.
+    exec su "$TARGET_USER" -s /bin/sh -c \
+        "HERMES_HOME='$HERMES_HOME' PLUGIN_DIR='$PLUGIN_DIR' exec /bin/sh '$0'$*"
+fi
 TARGET_VERSION="$1"
 
 echo "=== Hermes Portable Bootstrap ==="
@@ -538,16 +564,8 @@ if [ -x "$HERMES_BIN" ]; then
         echo "MOODLE_CONFIG_PATH=/var/www/html/config.php" >> "$HERMES_HOME/.env"
     fi
 
-    # Fix ownership: hermes plugins/skills install and config writers (hermes
-    # setup, hermes config) may have created root-owned files (when bootstrap
-    # is run via kubectl exec as root). The bridge, Moodle dashboard, and
-    # PHP-FPM settings page all run as www-data, so everything must be
-    # www-data-owned — especially config.yaml and .env, which the settings page
-    # writes to via file_put_contents().
-    if command -v chown >/dev/null 2>&1; then
-        chown -R www-data:www-data "$HERMES_HOME/plugins" "$HERMES_HOME/skills" "$HERMES_HOME/lib" 2>/dev/null || true
-        chown www-data:www-data "$HERMES_HOME/.env" "$HERMES_HOME/config.yaml" 2>/dev/null || true
-    fi
+    # All files are already www-data-owned because bootstrap.sh re-execs as
+    # www-data at the top (see the root-guard block). No chown cleanup needed.
 else
     echo "  WARNING: hermes binary not found — skipping skill/plugin install"
 fi

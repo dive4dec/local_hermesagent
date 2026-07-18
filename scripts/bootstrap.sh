@@ -253,12 +253,12 @@ VENV_PYTHON="$HERMES_HOME/venv/bin/python"
 if [ -n "$TARGET_VERSION" ]; then
     echo "  Installing hermes-agent==$TARGET_VERSION + deps via uv..."
     "$UV_BIN" pip install --python "$VENV_PYTHON" \
-        "hermes-agent==$TARGET_VERSION" aiohttp pymysql mcp 2>&1 || \
+        "hermes-agent[acp]==$TARGET_VERSION" aiohttp pymysql mcp 2>&1 || \
         echo "  WARNING: uv install had errors (may still be usable)"
 else
     echo "  Installing/upgrading hermes-agent + deps via uv..."
     "$UV_BIN" pip install --python "$VENV_PYTHON" \
-        --upgrade hermes-agent aiohttp pymysql mcp 2>&1 || \
+        --upgrade hermes-agent[acp] aiohttp pymysql mcp 2>&1 || \
         echo "  WARNING: uv install had errors (may still be usable)"
 fi
 HERMES_VERSION=$("$HERMES_HOME/venv/bin/hermes" --version 2>&1 || echo "unknown")

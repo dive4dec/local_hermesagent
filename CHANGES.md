@@ -5,6 +5,37 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.5.3] — 2026-07-18
+
+### Fixed
+
+#### Chat broken after zip reinstall — AMD build files missing from git
+- The `.gitignore` excluded `amd/build/*` (treated `.min.js` files as build
+  artifacts). GitHub zip downloads had no `chat.min.js`, `marked.min.js`, or
+  `terminal.min.js` — only `.gitkeep`. Moodle's `js_call_amd()` requires the
+  built files, so the chat page loaded without the AMD module, causing
+  "No define call for local_hermesagent/chat" and a non-functional send button.
+- Fix: removed the `amd/build/*` gitignore rule. The `.min.js` files are now
+  committed to the repo so they ship in the zip download. End users no longer
+  need to run `make build` or purge caches after a zip install.
+
+### Added
+
+#### Uninstall cleanup — Hermes data removed by default
+- Previously, uninstalling the plugin left the entire Hermes installation in
+  place (363 MB venv, config.yaml, .env, plugins, skills, conversation data).
+  Reinstalling would reuse stale config, and there was no way to get a clean
+  slate without manually deleting `/var/www/moodledata/.hermes/`.
+- New `db/uninstall.php` runs during plugin uninstall. By default it:
+  1. Stops the ACP bridge if running
+  2. Removes the Hermes home directory (venv, config, data)
+  3. Removes plugin config entries from `config_plugins`
+- New settings checkbox **"Retain Hermes data on uninstall"** (default: off).
+  Enable it before uninstalling to leave the Hermes directory in place across
+  a reinstall — the next install will reuse the existing venv and config.
+
+---
+
 ## [0.5.2] — 2026-07-18
 
 ### Fixed

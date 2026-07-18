@@ -248,5 +248,20 @@ if ($hassiteconfig) {
         ''
     ));
 
+    // ================================================================
+    // Section 5: Uninstall behaviour
+    // ================================================================
+    $uninstall_desc  = 'When this plugin is uninstalled, the ACP bridge is stopped and the ';
+    $uninstall_desc .= 'Hermes home directory (' . $hermes_home . ') is removed — including the ';
+    $uninstall_desc .= 'Python venv, config.yaml, .env, plugins, skills, and conversation data. ';
+    $uninstall_desc .= 'Enable this option to <strong>retain</strong> the Hermes data across a reinstall. ';
+    $uninstall_desc .= 'The directory will be left in place and the next install will reuse it.';
+    $settings->add(new admin_setting_configcheckbox(
+        'local_hermesagent/retain_data_on_uninstall',
+        'Retain Hermes data on uninstall',
+        $uninstall_desc,
+        '0'
+    ));
+
     $ADMIN->add('localplugins', $settings);
 }

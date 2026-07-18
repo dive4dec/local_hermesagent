@@ -34,9 +34,9 @@ moodledata/
 *.tmp
 *.log
 
-# Generated build files that should be rebuilt
-amd/build/*
-!amd/build/.gitkeep
+# AMD build files ARE committed — end users who download the zip need them.
+# Only ignore dev-only vendor packages that can be re-fetched.
+amd/build/vendor/
 
 # SSH keys
 *.pem

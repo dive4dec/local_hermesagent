@@ -55,7 +55,15 @@ class setting_configfile extends \admin_setting_configtextarea {
         // Write to file
         $written = file_put_contents($this->filepath, $data);
         if ($written === false) {
-            return get_string('errorsetting', 'admin');
+            // Provide a helpful error explaining the likely cause.
+            $owner = function_exists('posix_getpwuid')
+                ? @posix_getpwuid(fileowner($this->filepath)) : null;
+            $ownerstr = $owner ? $owner['name'] : fileowner($this->filepath);
+            return get_string('errorsetting', 'admin') . ' '
+                . 'Cannot write to ' . $this->filepath
+                . ' (owner: ' . $ownerstr
+                . ', PHP runs as: ' . get_current_user() . ').'
+                . ' Run: chown www-data:www-data ' . $this->filepath;
         }
 
         // Set appropriate permissions for config files

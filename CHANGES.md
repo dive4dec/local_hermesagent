@@ -5,6 +5,18 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **Bridge running as root → plugin files unreadable by www-data** — When
+  the bridge ran as root, child processes like `moosh plugin-install`
+  created files owned by `root:root` with mode `660`. PHP-FPM workers
+  (www-data) couldn't read them, so Moodle reported the plugins as
+  "missing from disk". Fixed by adding a root-detection guard to
+  `hermes-bridge-control.sh`: if invoked as root, it `exec`s itself as
+  www-data with the same arguments. All child processes now run as
+  www-data.
+
 ## [0.5.3] — 2026-07-18
 
 ### Fixed

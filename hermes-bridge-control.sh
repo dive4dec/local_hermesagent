@@ -1,17 +1,31 @@
 #!/bin/sh
 # Hermes ACP Bridge process manager
-# Runs as www-data (no sudo needed)
 # Actions: start, stop, restart, status
 #
 # The bridge (acp_bridge.py) is a FastAPI server that spawns `hermes acp`
 # as a subprocess. It listens on port 9118 (configurable via BRIDGE_PORT env).
 # The bridge script is copied to $HERMES_HOME/classes/bridge/acp_bridge.py
 # by bootstrap.sh, and also exists in the plugin directory.
+#
+# IMPORTANT: The bridge MUST run as www-data so that child processes
+# (including moosh plugin-install) create files owned by www-data.
+# If PHP-FPM worker (www-data) can't read plugin files, Moodle reports
+# them as "missing from disk".
 
 HERMES_HOME="${HERMES_HOME:-/var/www/moodledata/.hermes}"
 BRIDGE_PORT="${BRIDGE_PORT:-9118}"
 PID_DIR="$HERMES_HOME/pids"
-mkdir -p "$PID_DIR"
+
+# Drop to www-data if running as root. This ensures the bridge and all
+# child processes (hermes acp, moosh, etc.) run as www-data, so any files
+# they create are readable by PHP-FPM.
+if [ "$(id -u)" -eq 0 ]; then
+    mkdir -p "$PID_DIR"
+    chown www-data:www-data "$PID_DIR" "$HERMES_HOME/logs" 2>/dev/null
+    exec su -s /bin/sh www-data -c "HERMES_HOME='$HERMES_HOME' BRIDGE_PORT='$BRIDGE_PORT' PATH='$PATH' '$0' $*"
+fi
+
+mkdir -p "$PID_DIR" 2>/dev/null || true
 
 BRIDGE_PID_FILE="$PID_DIR/acp-bridge.pid"
 

@@ -92,5 +92,16 @@ function xmldb_local_hermesagent_upgrade($oldversion) {
         upgrade_plugin_savepoint(true, 2026061304, 'local', 'hermesagent');
     }
 
+    if ($oldversion < 2026071604) {
+        // Purge all caches (especially requirejs) so updated AMD modules
+        // are picked up. Moodle's upgrade flow calls purge_all_caches() at
+        // the end, but the requirejs cache can be rebuilt from stale state
+        // during the upgrade process if web requests race with the upgrade.
+        // Calling it here in the savepoint guarantees a clean rebuild.
+        purge_all_caches();
+
+        upgrade_plugin_savepoint(true, 2026071604, 'local', 'hermesagent');
+    }
+
     return true;
 }

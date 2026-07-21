@@ -65,6 +65,10 @@ switch ($action) {
         // Run in background so the HTTP request returns immediately — bootstrap
         // takes minutes (git clone, pip install, etc.) which would exceed
         // nginx/ingress timeouts and cause ERR_CONNECTION_ABORTED.
+        // Create .hermes dir first — it may not exist on first bootstrap.
+        if (!is_dir($hermes_home)) {
+            mkdir($hermes_home, 0777, true);
+        }
         $bootstrap_script = escapeshellarg(__DIR__ . '/scripts/bootstrap.sh');
         $log_file = escapeshellarg($hermes_home . '/bootstrap_update.log');
         $env = 'HERMES_HOME=' . escapeshellarg($hermes_home);

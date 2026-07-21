@@ -5,6 +5,85 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [0.5.3] — 2026-07-18
+
+### Fixed
+
+#### Chat broken after zip reinstall — AMD build files missing from git
+- The `.gitignore` excluded `amd/build/*` (treated `.min.js` files as build
+  artifacts). GitHub zip downloads had no `chat.min.js`, `marked.min.js`, or
+  `terminal.min.js` — only `.gitkeep`. Moodle's `js_call_amd()` requires the
+  built files, so the chat page loaded without the AMD module, causing
+  "No define call for local_hermesagent/chat" and a non-functional send button.
+- Fix: removed the `amd/build/*` gitignore rule. The `.min.js` files are now
+  committed to the repo so they ship in the zip download. End users no longer
+  need to run `make build` or purge caches after a zip install.
+
+### Added
+
+#### Uninstall cleanup — Hermes data removed by default
+- Previously, uninstalling the plugin left the entire Hermes installation in
+  place (363 MB venv, config.yaml, .env, plugins, skills, conversation data).
+  Reinstalling would reuse stale config, and there was no way to get a clean
+  slate without manually deleting `/var/www/moodledata/.hermes/`.
+- New `db/uninstall.php` runs during plugin uninstall. By default it:
+  1. Stops the ACP bridge if running
+  2. Removes the Hermes home directory (venv, config, data)
+  3. Removes plugin config entries from `config_plugins`
+- New settings checkbox **"Retain Hermes data on uninstall"** (default: off).
+  Enable it before uninstalling to leave the Hermes directory in place across
+  a reinstall — the next install will reuse the existing venv and config.
+
+---
+
+## [0.5.2] — 2026-07-18
+
+### Fixed
+
+#### Chat page non-functional after zip install (stale JS cache)
+- When the plugin is installed via Moodle's zip upload, the AMD module
+  `local_hermesagent/chat` was not included in Moodle's requirejs bundle.
+  The browser got "No define call for local_hermesagent/chat" and the send
+  button did nothing.
+- Root cause: `db/install.php` did not purge caches. Moodle's post-install
+  redirect to `admin/index.php?cache=0` purges caches, but the requirejs
+  cache can be rebuilt from stale state if web requests race with the
+  install process.
+- Fix: `db/install.php` now calls `purge_all_caches()` at the end of
+  installation. `db/upgrade.php` also calls it on every version bump via
+  a new savepoint (2026071604).
+
+#### Bootstrap never runs as root
+- `bootstrap.sh` now detects if it is running as root (e.g. via
+  `kubectl exec`) and re-executes itself as `www-data` using `su`.
+- All files created during bootstrap (venv, config.yaml, .env, plugins,
+  skills) are now www-data-owned from creation, preventing the "Could not
+  save setting" error on the settings page.
+
+#### ACP Bridge fails to start (missing agent-client-protocol)
+- `bootstrap.sh` installed `hermes-agent` without the `[acp]` extra.
+  The ACP bridge spawns `hermes acp` which requires
+  `agent-client-protocol==0.9.0`. Without it, the subprocess exits
+  immediately with "ACP dependencies not installed".
+- Fix: bootstrap now installs `hermes-agent[acp]` (both pinned and latest
+  version branches).
+
+---
+
+## [0.5.1] — 2026-07-18
+
+### Fixed
+
+#### Bootstrap never started on first install
+- `settings_action.php` redirected bootstrap output to
+  `$hermes_home/bootstrap_update.log`, but `.hermes/` doesn't exist on first
+  install. The shell silently failed to create the log file in a nonexistent
+  directory, so bootstrap never started and the settings page showed
+  "Never run".
+- Fix: `mkdir($hermes_home, 0777, true)` before the `exec()`.
+
+---
+
 ## [0.5.0] — 2026-07-16
 
 ### Added

@@ -56,6 +56,11 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
     var setupEventListeners = function() {
         $('#hermes-send-btn').on('click', sendMessage);
+        $('#hermes-stop-btn').on('click', function() {
+            if (isStreaming) {
+                stopStreaming();
+            }
+        });
 
         $('#hermes-message-input').on('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -91,6 +96,10 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             var $c = $(this).closest('.hermes-perm-actions');
             var outcome = $(this).data('outcome') || 'allow_once';
             handlePermissionResponse($c.data('perm-id'), outcome, $c);
+        });
+        $(document).on('click', '.hermes-perm-reject', function() {
+            var $c = $(this).closest('.hermes-perm-actions');
+            handlePermissionResponse($c.data('perm-id'), false, $c);
         });
 
         // Rename conversation
@@ -704,6 +713,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         }
         isStreaming = false;
         $('#hermes-send-btn').prop('disabled', false);
+        $('#hermes-stop-btn').prop('disabled', true);
         $('.hermes-spinner').remove();
         $('.hermes-streaming').removeClass('hermes-streaming');
         $.ajax({
@@ -717,6 +727,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     var streamResponse = function(conversationid) {
         isStreaming = true;
         $('#hermes-send-btn').prop('disabled', true);
+        $('#hermes-stop-btn').prop('disabled', false);
 
         var messageEl = addAssistantMessage();
         var spinnerId = 'hermes-spinner-' + msgCounter;
@@ -816,6 +827,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     var finishStreaming = function(spinnerId) {
         isStreaming = false;
         $('#hermes-send-btn').prop('disabled', false);
+        $('#hermes-stop-btn').prop('disabled', true);
         $('#' + spinnerId).remove();
         $('.hermes-streaming').removeClass('hermes-streaming');
     };

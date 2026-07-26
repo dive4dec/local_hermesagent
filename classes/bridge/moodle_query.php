@@ -4,17 +4,17 @@
  * Safe read-only Moodle database query tool for Hermes Agent
  * 
  * Security:
- * - Read-only queries only (SELECT, SHOW, DESCRIBE)
+ * - Read-only queries only (SELECT, SHOW, DESCURIBE)
  * - Results limited to 100 rows by default
  * - Sensitive columns redacted
  * - Queries logged for audit
+ *
+ * DB credentials are read from Moodle's config.php at runtime — never hardcoded.
  */
 
-// Database configuration
-$dbhost = getenv('MOODLE_DB_HOST') ?: 'mariadb';
-$dbname = getenv('MOODLE_DB_NAME') ?: 'moodle';
-$dbuser = getenv('MOODLE_DB_USER') ?: 'moodleuser';
-$dbpass = getenv('MOODLE_DB_PASS') ?: 'NJqnxkPqohs4kCyni8RVyg==';
+// Load DB config from Moodle's config.php
+define('CLI_SCRIPT', true);
+require('/var/www/html/config.php');
 
 // Sensitive columns to redact
 $sensitive_columns = [
@@ -91,8 +91,8 @@ if (stripos($sanitized_query, 'LIMIT') === false) {
     $sanitized_query .= " LIMIT 100";
 }
 
-// Connect to database
-$link = new mysqli($dbhost, $dbuser, $dbpass, $dbname);
+// Connect to database using Moodle's config
+$link = new mysqli($CFG->dbhost, $CFG->dbuser, $CFG->dbpass, $CFG->dbname);
 if ($link->connect_error) {
     $error = "Database connection failed: " . $link->connect_error;
     log_message("ERROR: " . $error);

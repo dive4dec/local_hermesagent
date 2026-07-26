@@ -1,6 +1,8 @@
 #!/bin/bash
 # Moodle DB query wrapper for Hermes Agent
 # Usage: moodle_db_query.sh "SELECT * FROM mdl_course WHERE shortname = 'CS1302'"
+#
+# DB credentials are read from Moodle's config.php at runtime — never hardcoded.
 
 set -euo pipefail
 
@@ -12,9 +14,15 @@ fi
 
 QUERY="$1"
 
-# Run the query on the pod
-kubectl exec -n edb phpfpm-0 -- php -r "
-\$link = new mysqli('mariadb', 'moodleuser', 'NJqnxkPqohs4kCyni8RVyg==', 'moodle');
+# Determine namespace from current context or default to edb
+NAMESPACE="${MOODLE_NAMESPACE:-edb}"
+
+# Run the query on the pod — PHP reads credentials from config.php
+kubectl exec -n "$NAMESPACE" phpfpm-0 -- php -r "
+define('CLI_SCRIPT', true);
+require('/var/www/html/config.php');
+
+\$link = new mysqli(\$CFG->dbhost, \$CFG->dbuser, \$CFG->dbpass, \$CFG->dbname);
 if (\$link->connect_error) die(json_encode(['error' => \$link->connect_error]));
 
 \$query = trim(\$argv[1]);
@@ -30,7 +38,7 @@ foreach (\$dangerous as \$kw) {
 }
 
 \$allowed = ['SELECT', 'SHOW', 'DESCRIBE', 'EXPLAIN', 'DESC'];
-\$first = strtok(\$upper, ' \\t');
+\$first = strtok(\$upper, ' \t');
 if (!in_array(\$first, \$allowed)) {
     echo json_encode(['error' => 'Only SELECT/SHOW/DESCRIBE allowed']);
     exit(1);

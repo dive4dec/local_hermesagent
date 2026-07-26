@@ -1,5 +1,7 @@
 <?php
-$link = new mysqli('mariadb', 'moodleuser', 'NJqnxkPqohs4kCyni8RVyg==', 'moodle');
+define('CLI_SCRIPT', true);
+require('/var/www/html/config.php');
+$link = new mysqli($CFG->dbhost, $CFG->dbuser, $CFG->dbpass, $CFG->dbname);
 if ($link->connect_error) die(json_encode(['error' => $link->connect_error]));
 
 $key_tables = [
@@ -18,7 +20,7 @@ $key_tables = [
 
 $schema = [];
 foreach ($key_tables as $table) {
-    $result = $link->query("SHOW COLUMNS FROM `{$table}`");
+    $result = $link->query("SHOW COLUMNS FROM `{$CFG->prefix}{$table}`");
     if (!$result) {
         $schema[$table] = ['error' => 'table not found'];
         continue;
@@ -27,7 +29,7 @@ foreach ($key_tables as $table) {
     while ($row = $result->fetch_assoc()) {
         $columns[] = $row;
     }
-    $count_result = $link->query("SELECT COUNT(*) as cnt FROM `{$table}`");
+    $count_result = $link->query("SELECT COUNT(*) as cnt FROM `{$CFG->prefix}{$table}`");
     $count = $count_result ? $count_result->fetch_assoc()['cnt'] : 0;
     $schema[$table] = [
         'columns' => $columns,

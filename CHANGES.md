@@ -17,6 +17,32 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   www-data with the same arguments. All child processes now run as
   www-data.
 
+## [0.5.4] — 2026-07-27
+
+### Fixed
+
+#### Leaked DB password purged from all bridge scripts
+- The edb DB password `NJqnxkPqohs4kCyni8RVyg==` was hardcoded in 4 files:
+  `scripts/moodle_db_mcp.py`, `classes/bridge/extract_schema.php`,
+  `classes/bridge/moodle_query.php`, and `classes/bridge/moodle_db_query.sh`.
+- All files now read DB credentials from Moodle's `config.php` at runtime via
+  `require('/var/www/html/config.php')` and use `$CFG->dbhost`, `$CFG->dbuser`,
+  `$CFG->dbpass`, `$CFG->dbname`. This makes every bridge script work on ANY
+  deployment automatically — no per-instance configuration needed.
+- Also fixed `extract_schema.php` to use `$CFG->prefix` for table names
+  (previously used bare table names without `mdl_` prefix → "table not found").
+- Also fixed `moodle_db_query.sh` to read namespace from `MOODLE_NAMESPACE`
+  env var (default: `edb`) instead of hardcoding `edb`.
+- The `moodle-plugins/Makefile` `dbcli` target also no longer hardcodes the
+  password — it reads it from `config.php` at runtime.
+
+#### MCP DB tool returning empty errors (`{"error": ""}`)
+- `moodle_db_mcp.py` had hardcoded DB credentials that only worked on the
+  original edb deployment. On cs1302eq-26a (different DB password), every
+  query returned `{"error": ""}` because `mysqli` connect failed → PHP fatal
+  error (exit 255) → empty stdout → `json.loads('')` → caught as empty error.
+- Fix: credentials read from `config.php` at runtime (same fix as above).
+
 ## [0.5.3] — 2026-07-18
 
 ### Fixed

@@ -78,6 +78,67 @@ switch ($action) {
             . $hermes_home . '/bootstrap_update.log for details.';
         break;
 
+    case 'sync_scripts':
+        // Quick sync: copy MCP server and bridge scripts from plugin dir to .hermes/,
+        // then restart the bridge. Use this after `make sync` when only plugin code
+        // changed (no need for full bootstrap which reinstalls the venv).
+        $plugin_dir = __DIR__;
+        $synced = [];
+        $errors = [];
+
+        // MCP server script
+        $mcp_src = $plugin_dir . '/scripts/moodle_db_mcp.py';
+        $mcp_dst = $hermes_home . '/mcp_servers/moodle_db_mcp.py';
+        if (file_exists($mcp_src)) {
+            if (!is_dir(dirname($mcp_dst))) {
+                mkdir(dirname($mcp_dst), 0777, true);
+            }
+            if (copy($mcp_src, $mcp_dst)) {
+                chmod($mcp_dst, 0755);
+                $synced[] = 'moodle_db_mcp.py';
+            } else {
+                $errors[] = 'Failed to copy moodle_db_mcp.py';
+            }
+        }
+
+        // ACP bridge script
+        $bridge_src = $plugin_dir . '/classes/bridge/acp_bridge.py';
+        $bridge_dst = $hermes_home . '/classes/bridge/acp_bridge.py';
+        if (file_exists($bridge_src)) {
+            if (!is_dir(dirname($bridge_dst))) {
+                mkdir(dirname($bridge_dst), 0777, true);
+            }
+            if (copy($bridge_src, $bridge_dst)) {
+                $synced[] = 'acp_bridge.py';
+            } else {
+                $errors[] = 'Failed to copy acp_bridge.py';
+            }
+        }
+
+        // ACP timeout patch script
+        $patch_src = $plugin_dir . '/scripts/patch_acp_timeout.py';
+        if (file_exists($patch_src)) {
+            $patch_cmd = escapeshellarg($hermes_home . '/venv/bin/python') . ' ' . escapeshellarg($patch_src) . ' 2>&1';
+            exec($patch_cmd, $patch_out, $patch_ret);
+            if ($patch_ret === 0) {
+                $synced[] = 'acp_timeout patch';
+            } else {
+                $errors[] = 'ACP timeout patch failed (non-fatal)';
+            }
+        }
+
+        // Restart bridge to pick up new scripts
+        $restart_cmd = escapeshellarg($control_script) . ' restart 2>&1';
+        exec($restart_cmd, $restart_out, $restart_ret);
+        sleep(3);
+
+        if (empty($errors)) {
+            $message = 'Synced: ' . implode(', ', $synced) . '. Bridge restarted.';
+        } else {
+            $message = 'Synced: ' . implode(', ', $synced) . '. Errors: ' . implode('; ', $errors);
+        }
+        break;
+
     default:
         $message = 'Unknown action: ' . $action;
 }

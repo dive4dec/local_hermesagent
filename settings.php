@@ -79,6 +79,8 @@ if ($hassiteconfig) {
     $links_html .= '<td>Full Hermes web UI — configure model/provider, browse sessions, manage MCP servers and toolsets, and set up messaging platforms. Opens in a new tab.</td></tr>';
     $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/settings_action.php?action=update&sesskey=' . sesskey() . '" class="btn btn-warning"><i class="icon fa fa-download"></i> Update &amp; Bootstrap</a></td>';
     $links_html .= '<td>Install or update the Hermes Python environment, bridge scripts, and MCP servers. Safe to run repeatedly (idempotent). Also repairs the installation if something is broken.</td></tr>';
+    $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/settings_action.php?action=sync_scripts&sesskey=' . sesskey() . '" class="btn btn-info"><i class="icon fa fa-sync"></i> Sync Scripts</a></td>';
+    $links_html .= '<td>Quick sync: copies MCP server and bridge scripts from the plugin directory to .hermes/ and restarts the bridge. Use this after <code>make sync</code> when only plugin code changed — much faster than full bootstrap (no venv reinstall).</td></tr>';
 
     // Bootstrap status row
     $bootstrap_log = "$hermes_home/bootstrap_update.log";

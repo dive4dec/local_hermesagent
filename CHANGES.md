@@ -7,6 +7,39 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-07-28
+
+### Added
+
+#### Send/Stop toggle button for aborting streaming responses
+- The chat input now has a single toggle button instead of separate Send and
+  Stop buttons. In idle state it shows a blue **▶** (triangle) labelled "Send";
+  while the ACP is streaming a response it switches to a red **⏹** (square)
+  labelled "Stop". Clicking ⏹ aborts the active stream and restarts the ACP
+  subprocess so the next message is not queued behind a dead session.
+- **State consistency** is enforced through a single `setButtonMode()`
+  function — the only code that touches the button's classes, icon, title,
+  or disabled state. This prevents the button showing Stop while the ACP has
+  already stopped (or Send while still streaming). A stale-state guard
+  resets the button to Send mode if it is clicked in Stop mode while
+  `isStreaming` is already false.
+- **Backend** (`acp_bridge.py`): new `ACPProcess.restart()` method kills the
+  `hermes acp` subprocess and spawns a fresh one, clearing all shared state
+  (`_sessions`, `_abort_events`, `_pending_permissions`, `_permission_options`,
+  `inbox` queue) under `_prompt_lock` to avoid the race condition where the
+  SSE reader thread keeps reading from a dead queue. The `session_abort`
+  endpoint calls `restart()` after signalling the abort event.
+- During permission prompts the button stays in Stop mode — the SSE stream
+  is still open, so the user may still want to abort.
+- JS is properly minified with terser (`--compress passes=2 --mangle`).
+
+#### "Sync Scripts" settings action
+- New "Sync Scripts" button on the plugin settings page (alongside "Update &
+  Bootstrap"). Copies the MCP server script and bridge scripts from the
+  plugin directory to `.hermes/mcp_servers/` and `.hermes/classes/bridge/`,
+  then restarts the bridge — without running a full bootstrap. Use this
+  after `make sync` when only plugin code (not dependencies) changed.
+
 ### Fixed
 - **Bridge running as root → plugin files unreadable by www-data** — When
   the bridge ran as root, child processes like `moosh plugin-install`

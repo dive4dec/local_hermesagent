@@ -240,6 +240,13 @@ function api_stream_response(): void {
     $req_id = 'R' . substr(md5(uniqid(rand(), true)), 0, 10);
     _hermes_log("[$req_id] ===== STREAM START =====");
     
+    // Send an initial keepalive comment so the browser's EventSource
+    // receives data immediately and doesn't fire a premature 'error'
+    // event while waiting for the ACP to produce the first chunk
+    // (which can take 5-10 seconds during model initialization).
+    echo ": keepalive\n\n";
+    flush();
+    
     // Call ACP bridge with streaming
     $ch = curl_init();
     curl_setopt_array($ch, [

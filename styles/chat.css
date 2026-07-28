@@ -305,6 +305,21 @@
 .hermes-input-container .btn-primary:disabled {
   opacity: 0.6;
 }
+.hermes-input-container .hermes-stop-btn {
+  align-self: flex-end;
+  min-width: 80px;
+  border-radius: 8px;
+  background: #dc3545;
+  border: none;
+  color: #fff;
+}
+.hermes-input-container .hermes-stop-btn:hover {
+  background: #c82333;
+}
+.hermes-input-container .hermes-stop-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* Tool modal */
 .hermes-tool-modal {

@@ -220,6 +220,12 @@ echo html_writer::tag('button', get_string('send', 'local_hermesagent'), [
     'class' => 'btn btn-primary',
     'type' => 'button',
 ]);
+echo html_writer::tag('button', get_string('stop', 'local_hermesagent'), [
+    'id' => 'hermes-stop-btn',
+    'class' => 'btn hermes-stop-btn',
+    'type' => 'button',
+    'disabled' => 'disabled',
+]);
 echo html_writer::end_div('hermes-input-container');
 echo html_writer::end_div('hermes-input-area');
 

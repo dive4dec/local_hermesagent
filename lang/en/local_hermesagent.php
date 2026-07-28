@@ -29,6 +29,7 @@ $string['conversations'] = 'Conversations';
 $string['newconversation'] = 'New conversation';
 $string['type_message'] = 'Ask Hermes anything about your Moodle instance...';
 $string['send'] = 'Send';
+$string['stop'] = 'Stop';
 $string['approve'] = 'Approve';
 $string['reject'] = 'Reject';
 $string['tool_request'] = 'Tool Request';

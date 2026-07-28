@@ -127,6 +127,59 @@ class ACPProcess:
         }, timeout=30)
         log.info("ACP initialized, response: %s", resp)
 
+    def restart(self):
+        """Kill the running hermes acp subprocess and start a fresh one.
+
+        hermes acp has no native cancel/session-abort call, so a stopped
+        prompt keeps running in the background, blocking the next prompt
+        ("Queued for the next turn"). To truly interrupt it we recycle
+        the subprocess.
+
+        Thread safety: the SSE generator thread runs in send_prompt_streaming
+        which holds _prompt_lock. After we terminate the process, that thread
+        will detect either (a) abort_event.is_set() → return, or (b)
+        self.proc.poll() is not None → return. Either way it releases
+        _prompt_lock in its finally block. We do NOT wait for the lock here
+        to avoid blocking the event loop — the next prompt simply acquires
+        the lock when the old thread exits (~0.5s).
+        """
+        log.warning("Restarting hermes acp subprocess (abort/interrupt)")
+
+        # Terminate the subprocess. Old reader threads get EOF and exit.
+        try:
+            if self.proc is not None:
+                try:
+                    self.proc.terminate()
+                except Exception as e:
+                    log.error("Error terminating acp proc: %s", e)
+                try:
+                    self.proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        self.proc.kill()
+                    except Exception:
+                        pass
+        except Exception as e:
+            log.error("Error during acp shutdown: %s", e)
+
+        # Clear all conversational state. The SSE generator holds a local
+        # reference to abort_event, so clearing _abort_events doesn't affect
+        # it — it will still see abort_event.is_set() and exit.
+        with self._lock:
+            self._sessions = {}
+            self._abort_events = {}
+            self._pending_permissions = set()
+            self._permission_options = {}
+            self._next_id = 0
+
+        # Re-init process state and start a fresh subprocess
+        self.inbox = queue.Queue()
+        self.stderr_tail = []
+        self._out_thread = None
+        self._err_thread = None
+        self.start()
+        log.info("hermes acp subprocess restarted")
+
     def _stdout_reader(self):
         """Read JSON-RPC messages from acp stdout, ignoring non-JSON log lines."""
         while True:
@@ -906,6 +959,12 @@ async def session_abort(request: Request):
     if conversationid in acp._abort_events:
         acp._abort_events[conversationid].set()
         log.info("Abort signal sent for conversation %s", conversationid)
+        # Recycle the hermes acp subprocess. Without this, the stopped
+        # prompt keeps running in the background and blocks the next one.
+        try:
+            acp.restart()
+        except Exception as e:
+            log.error("Failed to restart acp after abort: %s", e, exc_info=True)
         return {"status": "ok", "aborted": True}
     return {"status": "ok", "aborted": False, "message": "No active stream for this conversation"}
 

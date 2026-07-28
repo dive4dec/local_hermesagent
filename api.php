@@ -200,6 +200,10 @@ function api_stream_response(): void {
     }
 
     $system_prompt = "You are a helpful assistant with access to Moodle database tools.\n\n";
+    $system_prompt .= "## Current User\n";
+    $system_prompt .= "Moodle user ID: {$USER->id}\n";
+    $system_prompt .= "Moodle username: {$USER->username}\n";
+    $system_prompt .= "Use this user ID for any skill that requires --moodle-userid.\n\n";
     if ($skill_content) {
         $system_prompt .= "## Available Skills\n" . $skill_content;
     }

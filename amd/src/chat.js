@@ -51,14 +51,51 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     };
 
     // ---------------------------------------------------------------------------
+    // Send / Stop toggle button
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Set the action button to send mode (blue, triangle icon)
+     * or stop mode (red, square icon).
+     * This is the SINGLE source of truth for the button appearance.
+     * No other code should touch the button classes or text directly.
+     */
+    var BUTTON_SEND = 'send';
+    var BUTTON_STOP = 'stop';
+
+    var setButtonMode = function(mode) {
+        var $btn = $('#hermes-send-btn');
+        if (mode === BUTTON_STOP) {
+            $btn.removeClass('btn-primary hermes-send-mode')
+                .addClass('hermes-stop-mode')
+                .html('&#9632;')   // square symbol
+                .attr('title', 'Stop')
+                .attr('aria-label', 'Stop')
+                .prop('disabled', false);
+        } else {
+            $btn.removeClass('hermes-stop-mode')
+                .addClass('btn-primary hermes-send-mode')
+                .html('&#9654;')   // triangle symbol
+                .attr('title', 'Send')
+                .attr('aria-label', 'Send')
+                .prop('disabled', false);
+        }
+    };
+
+    // ---------------------------------------------------------------------------
     // Event listeners
     // ---------------------------------------------------------------------------
 
     var setupEventListeners = function() {
-        $('#hermes-send-btn').on('click', sendMessage);
-        $('#hermes-stop-btn').on('click', function() {
-            if (isStreaming) {
-                stopStreaming();
+        $('#hermes-send-btn').on('click', function() {
+            if ($('#hermes-send-btn').hasClass('hermes-stop-mode')) {
+                if (isStreaming) {
+                    stopStreaming();
+                } else {
+                    setButtonMode(BUTTON_SEND);
+                }
+            } else {
+                sendMessage();
             }
         });
 
@@ -708,8 +745,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             eventSourceRef = null;
         }
         isStreaming = false;
-        $('#hermes-send-btn').prop('disabled', false);
-        $('#hermes-stop-btn').prop('disabled', true);
+        setButtonMode(BUTTON_SEND);
         $('.hermes-spinner').remove();
         $('.hermes-streaming').removeClass('hermes-streaming');
         $.ajax({
@@ -722,8 +758,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
     var streamResponse = function(conversationid) {
         isStreaming = true;
-        $('#hermes-send-btn').prop('disabled', true);
-        $('#hermes-stop-btn').prop('disabled', false);
+        setButtonMode(BUTTON_STOP);
 
         var messageEl = addAssistantMessage();
         var spinnerId = 'hermes-spinner-' + msgCounter;
@@ -822,8 +857,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
      */
     var finishStreaming = function(spinnerId) {
         isStreaming = false;
-        $('#hermes-send-btn').prop('disabled', false);
-        $('#hermes-stop-btn').prop('disabled', true);
+        setButtonMode(BUTTON_SEND);
         $('#' + spinnerId).remove();
         $('.hermes-streaming').removeClass('hermes-streaming');
     };
@@ -849,10 +883,9 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         var title = permData.title || 'Tool execution requested';
         var desc = permData.description || '';
 
-        // Re-enable the Send button so the user can type !approve / !reject
-        // (the button was disabled by streamResponse).  The SSE stream stays
-        // open; permission responses go via a separate POST endpoint.
-        $('#hermes-send-btn').prop('disabled', false);
+        // Keep the button in stop mode during permission prompts.
+        // The SSE stream is still open, so the user may still want to abort.
+        // Permission responses go via a separate POST endpoint.
 
         // Insert permission prompt into the current assistant message bubble,
         // BEFORE the content div so it's visible above the response text.

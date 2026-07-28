@@ -305,20 +305,29 @@
 .hermes-input-container .btn-primary:disabled {
   opacity: 0.6;
 }
-.hermes-input-container .hermes-stop-btn {
+/* Stop mode (red, square icon) for the toggle button */
+.hermes-input-container .hermes-stop-mode {
   align-self: flex-end;
-  min-width: 80px;
+  min-width: 44px;
   border-radius: 8px;
   background: #dc3545;
   border: none;
   color: #fff;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 8px 12px;
 }
-.hermes-input-container .hermes-stop-btn:hover {
+.hermes-input-container .hermes-stop-mode:hover {
   background: #c82333;
 }
-.hermes-input-container .hermes-stop-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+/* Send mode (blue, triangle icon) for the toggle button */
+.hermes-input-container .hermes-send-mode {
+  align-self: flex-end;
+  min-width: 44px;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 8px 12px;
 }
 
 /* Tool modal */

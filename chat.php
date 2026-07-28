@@ -215,16 +215,12 @@ echo html_writer::tag('textarea', '', [
     'placeholder' => get_string('type_message', 'local_hermesagent'),
     'rows' => '2',
 ]);
-echo html_writer::tag('button', get_string('send', 'local_hermesagent'), [
+echo html_writer::tag('button', '&#9654;', [   // ▶
     'id' => 'hermes-send-btn',
-    'class' => 'btn btn-primary',
+    'class' => 'btn btn-primary hermes-send-mode',
     'type' => 'button',
-]);
-echo html_writer::tag('button', get_string('stop', 'local_hermesagent'), [
-    'id' => 'hermes-stop-btn',
-    'class' => 'btn hermes-stop-btn',
-    'type' => 'button',
-    'disabled' => 'disabled',
+    'title' => get_string('send', 'local_hermesagent'),
+    'aria-label' => get_string('send', 'local_hermesagent'),
 ]);
 echo html_writer::end_div('hermes-input-container');
 echo html_writer::end_div('hermes-input-area');

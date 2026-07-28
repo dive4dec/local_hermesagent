@@ -133,7 +133,7 @@ function api_send_message(): void {
  * Stream response from ACP bridge
  */
 function api_stream_response(): void {
-    global $DB, $USER;
+    global $DB, $USER, $CFG;
     error_log('HERMES [API]: api_stream_response START conv=' . ($_GET['conversationid'] ?? 'NONE'));
     
     // CRITICAL: Log EVERY stream request
@@ -220,6 +220,34 @@ function api_stream_response(): void {
         'moodle_userid' => $USER->id,
     ];
     
+    // Write the user's Moodle session cookie to a file so Python skills can
+    // make authenticated HTTP requests to Moodle as this user. This is a
+    // generic capability — any skill that needs Moodle HTTP access can read
+    // $HERMES_HOME/run/msession_<userid>.json. File is 0600, owned by www-data,
+    // with a 30-minute TTL enforced by readers.
+    $hermes_home = getenv('HERMES_HOME') ?: '/var/www/moodledata/.hermes';
+    $run_dir = $hermes_home . '/run';
+    if (!is_dir($run_dir)) {
+        @mkdir($run_dir, 0770, true);
+    }
+    $session_cookie_name = session_name();
+    $session_cookie_value = $_COOKIE[$session_cookie_name] ?? '';
+    if ($session_cookie_value) {
+        $msession_file = $run_dir . '/msession_' . $USER->id . '.json';
+        $msession_data = [
+            'cookie_name' => $session_cookie_name,
+            'cookie_value' => $session_cookie_value,
+            'domain' => parse_url($CFG->wwwroot, PHP_URL_HOST),
+            'path' => $CFG->sessioncookiepath ?: '/',
+            'moodle_url' => $CFG->wwwroot,
+            'userid' => $USER->id,
+            'username' => $USER->username,
+            'written_at' => time(),
+        ];
+        @file_put_contents($msession_file, json_encode($msession_data));
+        @chmod($msession_file, 0600);
+    }
+
     // CRITICAL: Release session and flush buffers BEFORE any output
     ignore_user_abort(true);
     session_write_close();

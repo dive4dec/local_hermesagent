@@ -7,6 +7,21 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-07-28
+
+### Fixed
+
+#### SSE connection error on first message
+- The browser's `EventSource` was timing out (HTTP 499 in nginx) because
+  `api.php` set SSE headers then blocked on `curl_exec()` waiting for the
+  ACP bridge to produce the first chunk — which takes 5-10 seconds during
+  model initialization. During that gap no bytes reached the browser, so
+  `EventSource` fired a premature `error` event showing "Connection error".
+- Fix: send a `: keepalive` SSE comment and `flush()` immediately after
+  setting headers, before calling `curl_exec()`. This is the standard SSE
+  keepalive pattern (HTML5 §9.2) — comment lines are ignored by the client
+  but keep the TCP connection alive until the first real event arrives.
+
 ## [0.5.5] — 2026-07-28
 
 ### Added

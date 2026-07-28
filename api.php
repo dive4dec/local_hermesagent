@@ -200,10 +200,6 @@ function api_stream_response(): void {
     }
 
     $system_prompt = "You are a helpful assistant with access to Moodle database tools.\n\n";
-    $system_prompt .= "## Current User\n";
-    $system_prompt .= "Moodle user ID: {$USER->id}\n";
-    $system_prompt .= "Moodle username: {$USER->username}\n";
-    $system_prompt .= "Use this user ID for any skill that requires --moodle-userid.\n\n";
     if ($skill_content) {
         $system_prompt .= "## Available Skills\n" . $skill_content;
     }
@@ -227,8 +223,9 @@ function api_stream_response(): void {
     // Write the user's Moodle session cookie to a file so Python skills can
     // make authenticated HTTP requests to Moodle as this user. This is a
     // generic capability — any skill that needs Moodle HTTP access can read
-    // $HERMES_HOME/run/msession_<userid>.json. File is 0600, owned by www-data,
-    // with a 30-minute TTL enforced by readers.
+    // $HERMES_HOME/run/msession.json. The bridge is single-threaded (one
+    // active prompt at a time), so a single file is safe and gets
+    // overwritten on each request. File is 0600, owned by www-data.
     $hermes_home = getenv('HERMES_HOME') ?: '/var/www/moodledata/.hermes';
     $run_dir = $hermes_home . '/run';
     if (!is_dir($run_dir)) {
@@ -237,7 +234,7 @@ function api_stream_response(): void {
     $session_cookie_name = session_name();
     $session_cookie_value = $_COOKIE[$session_cookie_name] ?? '';
     if ($session_cookie_value) {
-        $msession_file = $run_dir . '/msession_' . $USER->id . '.json';
+        $msession_file = $run_dir . '/msession.json';
         $msession_data = [
             'cookie_name' => $session_cookie_name,
             'cookie_value' => $session_cookie_value,

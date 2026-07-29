@@ -7,6 +7,25 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.7] — 2026-07-29
+
+### Added
+
+#### Session file for Python skill HTTP access
+- `api.php` now writes `$HERMES_HOME/run/msession.json` on each chat API call.
+  This file contains the current user's Moodle session cookie (`MoodleSession`),
+  domain, Moodle URL, user ID, and username — so Python skills can make
+  authenticated HTTP requests to Moodle as the current user without database
+  access or Chrome/CDP.
+- The file uses a **fixed path** (not per-userid) because the ACP bridge is
+  single-threaded — only one user is ever active at a time. Permissions are
+  0600, owned by www-data.
+- This is a **generic capability** — any skill that needs Moodle HTTP auth can
+  read `msession.json`. No skill names or configuration are hardcoded in the
+  plugin.
+
+---
+
 ## [0.5.6] — 2026-07-28
 
 ### Fixed

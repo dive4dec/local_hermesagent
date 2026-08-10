@@ -1308,10 +1308,10 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             }
             config.tex = config.tex || {};
             if (!config.tex.inlineMath) {
-                config.tex.inlineMath = [['\\(', '\\)'], ['$', '$']];
+                config.tex.inlineMath = [['\\(', '\\)']];
             }
             if (!config.tex.displayMath) {
-                config.tex.displayMath = [['\\[', '\\]'], ['$$', '$$']];
+                config.tex.displayMath = [['\\[', '\\]']];
             }
             if (!config.tex.processEscapes) {
                 config.tex.processEscapes = true;

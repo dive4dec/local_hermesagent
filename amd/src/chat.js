@@ -19,12 +19,9 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     var mathjaxConfigured = false;
     var pendingQuote = null; // {text, role} — set by reply button
 
-    // Math delimiter placeholders (unicode private-use area)
+    // Math delimiter placeholders (unicode private-use area) — no longer used
+    // (MathJax 4 handles delimiters natively via tex.inlineMath/tex.displayMath).
     var BS = String.fromCharCode(92); // backslash
-    var MATH_OPEN = String.fromCharCode(57344);       // display math
-    var MATH_CLOSE = String.fromCharCode(57345);
-    var MATH_INLINE_OPEN = String.fromCharCode(57346);  // inline math
-    var MATH_INLINE_CLOSE = String.fromCharCode(57347);
 
     // ---------------------------------------------------------------------------
     // Initialization
@@ -1299,19 +1296,24 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     var configureMathJax = function() {
         if (mathjaxConfigured) return;
         mathjaxConfigured = true;
+        // MathJax 4 configuration must be set BEFORE the script loads.
+        // Moodle's loader sets window.MathJax = config before loading the script.
+        // If MathJax is already loaded (e.g. by Moodle's own filter), we extend
+        // the existing config; otherwise we set it for the loader to pick up.
         try {
-            if (window.MathJax) {
-                window.MathJax.Hub.Config({
-                    tex2jax: {
-                        inlineMath: [['$', '$'], ['\\(', '\\)']],
-                        displayMath: [['$$', '$$'], ['\\[', '\\]']],
-                        processEscapes: true
-                    },
-                    showProcessingMessages: false,
-                    messageStyle: 'none',
-                    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
-                });
+            var config = window.MathJax || {};
+            if (typeof config !== 'object' || Array.isArray(config)) {
+                config = {};
             }
+            config.tex = config.tex || {};
+            config.tex.inlineMath = [['\\(', '\\)'], ['$', '$']];
+            config.tex.displayMath = [['\\[', '\\]'], ['$$', '$$']];
+            config.tex.processEscapes = true;
+            // MathJax natively skips these tags — no code-block protection needed
+            config.tex.skipHtmlTags = ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'];
+            config.options = config.options || {};
+            config.options.skipHtmlTags = ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'];
+            window.MathJax = config;
         } catch (e) {
             console.warn('[Hermes] MathJax config error:', e);
         }
@@ -1378,14 +1380,9 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     };
 
     /**
-     * Render markdown to HTML, protecting math delimiters from marked.js.
-     * Pipeline:
-     *   1. Extract code blocks (inline + fenced) → placeholders
-     *   2. Protect \[...\] and $$...$$ → unicode placeholders (non-code text only)
-     *   3. Render markdown with marked.js
-     *   4. Restore math delimiters
-     *   5. Restore code blocks (after MathJax, so code is never typeset)
-     *   6. Post-process links
+     * Render markdown to HTML, then let MathJax typeset the result.
+     * MathJax's skipHtmlTags config handles code blocks natively —
+     * no custom placeholder/protect/restore logic needed.
      */
     var renderMarkdown = function(text) {
         if (!text || !text.trim()) return Promise.resolve('');
@@ -1397,17 +1394,8 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             var filename = path.split('/').pop();
             return '![' + alt + '](' + M.cfg.wwwroot + '/local/hermesagent/image.php?f=' + encodeURIComponent(filename) + ')';
         });
-        // Step 1: Protect code blocks from math processing
-        var codeStore = [];
-        text = protectCodeBlocks(text, codeStore);
-        // Step 2: Protect math delimiters (non-code text only)
-        text = protectMathDelimiters(text);
         return loadMarked().then(function(m) {
-            // Step 3-4: Render markdown, restore math delimiters
-            var html = unescapeMathDelimiters(m.parse(text));
-            // Step 5: Restore code blocks
-            html = restoreCodeBlocks(html, codeStore);
-            // Step 6: Post-process links
+            var html = m.parse(text);
             return postProcessLinks(html);
         }).catch(function(err) {
             console.error('[Hermes] markdown parse failed:', err);
@@ -1420,194 +1408,6 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             element.html(html);
             try { typesetMath(element[0]); } catch (e) { /* non-fatal */ }
         }).catch(function(e) { /* non-fatal */ });
-    };
-
-    // --- Math delimiter protection ---
-
-    var isMathContent = function(eq) {
-        if (!eq) return false;
-        // Be permissive: anything between $...$ or \[...\] that isn't
-        // obviously prose is treated as math.  Only exclude content that
-        // is clearly not math (long sentences with spaces and no math chars).
-        if (/[=+\-^{}\\]/.test(eq)) return true;
-        if (/\b(sin|cos|tan|log|frac|sqrt|pi|infty|cdot|times|leq|geq|neq|approx|pm|right|left|lim|sum|int|alpha|beta|gamma|delta|theta|lambda|mu|rho|sigma|phi|psi|omega|vec|hat|bar|dot|ddot)\b/.test(eq)) return true;
-        // Short tokens without spaces are likely math (e.g. "x", "n+1", "a_1")
-        if (eq.length <= 30 && !/\s/.test(eq)) return true;
-        return false;
-    };
-
-    // -----------------------------------------------------------------------
-    // Code block protection — extract code before math processing so
-    // $$, \[, \] inside code are never treated as math delimiters.
-    // -----------------------------------------------------------------------
-
-    // Use a unique sentinel that marked.js won't mangle and MathJax won't touch.
-    // Format: \u0001CODEBLOCK0\u0001 ... \u0001CODEBLOCK0\u0001
-    var CODE_SENTINEL = String.fromCharCode(1); // SOH — invisible, not in normal text
-
-    var protectCodeBlocks = function(text, store) {
-        // 1. Fenced code blocks: ```lang\n...\n```
-        text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, function(match, lang, code) {
-            var idx = store.length;
-            store.push({ type: 'fenced', lang: lang, code: code });
-            return CODE_SENTINEL + 'CB' + idx + CODE_SENTINEL;
-        });
-        // 2. Inline code: `...`
-        text = text.replace(/`([^`\n]+)`/g, function(match, code) {
-            var idx = store.length;
-            store.push({ type: 'inline', lang: '', code: code });
-            return CODE_SENTINEL + 'CB' + idx + CODE_SENTINEL;
-        });
-        return text;
-    };
-
-    var restoreCodeBlocks = function(html, store) {
-        for (var i = 0; i < store.length; i++) {
-            var placeholder = CODE_SENTINEL + 'CB' + i + CODE_SENTINEL;
-            var item = store[i];
-            var replacement;
-            if (item.type === 'fenced') {
-                var langClass = item.lang ? ' class="language-' + item.lang + '"' : '';
-                replacement = '<pre><code' + langClass + '>' + escapeHtml(item.code) + '</code></pre>';
-            } else {
-                replacement = '<code>' + escapeHtml(item.code) + '</code>';
-            }
-            html = html.split(placeholder).join(replacement);
-        }
-        return html;
-    };
-
-    var protectMathDelimiters = function(text) {
-        var result = '';
-        var start = 0;
-        var OPEN = BS + '[';
-        var CLOSE = BS + ']';
-
-        while (start < text.length) {
-            var oi = text.indexOf(OPEN, start);
-            if (oi === -1) { result += text.substring(start); break; }
-            var ci = text.indexOf(CLOSE, oi + OPEN.length);
-            if (ci === -1) {
-                result += text.substring(start, oi) + MATH_OPEN;
-                start = oi + OPEN.length;
-                continue;
-            }
-            var content = text.substring(oi + OPEN.length, ci);
-            if (isMathContent(content.trim())) {
-                result += text.substring(start, oi) + MATH_OPEN + content + MATH_CLOSE;
-            } else {
-                result += text.substring(start, oi + OPEN.length);
-            }
-            start = ci + CLOSE.length;
-        }
-
-        return protectInlineDollars(convertLegacyDollars(protectBareBrackets(result)));
-    };
-
-    var protectBareBrackets = function(text) {
-        var nl = text.indexOf('\r\n') !== -1 ? '\r\n' : '\n';
-        return text.split(nl).map(protectLineBareBrackets).join(nl);
-    };
-
-    var protectLineBareBrackets = function(line) {
-        var oi = line.indexOf('[');
-        if (oi === -1 || line.substring(0, oi).trim() !== '') return line;
-        var ci = line.indexOf(']', oi + 1);
-        if (ci === -1 || (ci + 1 < line.length && line[ci + 1] === '(')) return line;
-        var eq = line.substring(oi + 1, ci).trim();
-        if (isMathContent(eq)) {
-            return line.substring(0, oi) + MATH_OPEN + eq + MATH_CLOSE + line.substring(ci + 1);
-        }
-        return line;
-    };
-
-    var convertLegacyDollars = function(text) {
-        var result = '';
-        var start = 0;
-        while (start < text.length) {
-            var oi = text.indexOf('$$', start);
-            if (oi === -1) { result += text.substring(start); break; }
-            var ci = text.indexOf('$$', oi + 2);
-            if (ci === -1) { result += text.substring(oi); break; }
-            var eq = text.substring(oi + 2, ci).trim();
-            if (isMathContent(eq)) {
-                result += text.substring(start, oi) + MATH_OPEN + eq + MATH_CLOSE;
-            } else {
-                result += text.substring(oi, ci + 2);
-            }
-            start = ci + 2;
-        }
-        return result;
-    };
-
-    /**
-     * Protect inline $...$ math using JupyterLab-style smart matching rules:
-     * - Opening $ must be followed by a non-space, non-$ character
-     * - Closing $ must be preceded by a non-space, non-$ character
-     * - $ at start/end of a line is not a delimiter (avoid spanning paragraphs)
-     * - \$ (escaped) is treated as literal dollar, not a delimiter
-     * Runs AFTER code blocks and $$...$$ are already protected, so only
-     * single $ remains in non-code, non-display-math text.
-     */
-    var protectInlineDollars = function(text) {
-        var result = '';
-        var i = 0;
-        while (i < text.length) {
-            // Look for opening $
-            if (text[i] !== '$') {
-                result += text[i];
-                i++;
-                continue;
-            }
-            // Check if escaped \$
-            if (i > 0 && text[i - 1] === BS) {
-                result += '$';
-                i++;
-                continue;
-            }
-            // Opening $ must be followed by non-space, non-$, non-newline
-            if (i + 1 >= text.length || /\s|\$/.test(text[i + 1])) {
-                result += '$';
-                i++;
-                continue;
-            }
-            // Find closing $ — must be preceded by non-space, non-$
-            var closeIdx = -1;
-            for (var j = i + 2; j < text.length; j++) {
-                if (text[j] === '$' && !/\s|\$/.test(text[j - 1])) {
-                    // Check not escaped
-                    if (text[j - 1] !== BS) {
-                        closeIdx = j;
-                        break;
-                    }
-                }
-                // Don't cross double newlines (paragraph boundary)
-                if (text[j] === '\n' && j + 1 < text.length && text[j + 1] === '\n') {
-                    break;
-                }
-            }
-            if (closeIdx === -1) {
-                // No closing $ found — treat as literal
-                result += '$';
-                i++;
-                continue;
-            }
-            var eq = text.substring(i + 1, closeIdx);
-            if (isMathContent(eq.trim())) {
-                result += MATH_INLINE_OPEN + eq + MATH_INLINE_CLOSE;
-            } else {
-                result += '$' + eq + '$';
-            }
-            i = closeIdx + 1;
-        }
-        return result;
-    };
-
-    var unescapeMathDelimiters = function(html) {
-        return html.split(MATH_OPEN).join(BS + '[')
-                   .split(MATH_CLOSE).join(BS + ']')
-                   .split(MATH_INLINE_OPEN).join(BS + '(')
-                   .split(MATH_INLINE_CLOSE).join(BS + ')');
     };
 
     // ---------------------------------------------------------------------------

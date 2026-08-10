@@ -912,12 +912,24 @@ async def session_permission(request: Request):
     # sending allow_session/allow_always there would be rejected by the ACP.
     offered = acp._permission_options.get(permission_id, set())
     if outcome_str != "deny" and offered and outcome_str not in offered:
-        allowed = ", ".join(sorted(offered - {"deny"})) or "none"
-        return {
-            "status": "error",
-            "message": f"This permission request only supports: {allowed}. "
-                       f"Requested '{outcome_str}' is not available for this tool.",
-        }
+        # Fall back to allow_once if available, rather than leaving the
+        # permission request unanswered.  This avoids the situation where
+        # the user clicks "Approve session" on a tool that only supports
+        # allow_once and nothing happens at all.
+        if "allow_once" in offered:
+            log.info(
+                "Permission %s: requested '%s' not available, "
+                "falling back to allow_once",
+                permission_id, outcome_str,
+            )
+            outcome_str = "allow_once"
+        else:
+            allowed = ", ".join(sorted(offered - {"deny"})) or "none"
+            return {
+                "status": "error",
+                "message": f"This permission request only supports: {allowed}. "
+                           f"Requested '{outcome_str}' is not available for this tool.",
+            }
 
     # Map outcome to ACP JSON-RPC result
     if outcome_str in ("allow_once", "allow_session", "allow_always"):

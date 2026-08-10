@@ -1276,6 +1276,42 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
                     window.marked = win.marked;
                     markedInstance = win.marked;
                     markedInstance.setOptions({ gfm: true, breaks: false, headerIds: false, mangle: false });
+                    // Register math delimiters as official marked.js extensions.
+                    // This prevents marked.js from treating \( and \[ as escape
+                    // sequences (which strips the backslash).  MathJax then
+                    // sees the raw delimiters in the rendered HTML and typesets them.
+                    markedInstance.use({
+                        extensions: [
+                            {
+                                name: 'mathInline',
+                                level: 'inline',
+                                start: function(src) { return src.indexOf('\\('); },
+                                tokenizer: function(src) {
+                                    var match = /^\\\(([\s\S]+?)\\\)/.exec(src);
+                                    if (match) {
+                                        return { type: 'mathInline', raw: match[0], text: match[1] };
+                                    }
+                                },
+                                renderer: function(token) {
+                                    return '\\(' + token.text + '\\)';
+                                }
+                            },
+                            {
+                                name: 'mathDisplay',
+                                level: 'inline',
+                                start: function(src) { return src.indexOf('\\['); },
+                                tokenizer: function(src) {
+                                    var match = /^\\\[([\s\S]+?)\\\]/.exec(src);
+                                    if (match) {
+                                        return { type: 'mathDisplay', raw: match[0], text: match[1] };
+                                    }
+                                },
+                                renderer: function(token) {
+                                    return '\\[' + token.text + '\\]';
+                                }
+                            }
+                        ]
+                    });
                     document.head.removeChild(iframe);
                     resolve(markedInstance);
                 } else {

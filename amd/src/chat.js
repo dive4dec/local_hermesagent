@@ -1296,30 +1296,29 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     var configureMathJax = function() {
         if (mathjaxConfigured) return;
         mathjaxConfigured = true;
-        // Extend the existing window.MathJax config (set by Moodle's
-        // filter_mathjaxloader configure()) rather than replacing it.
-        // This keeps us consistent with whatever MathJax version / CDN
-        // URL the admin configured on the filter settings page.
-        // We only add chat-specific needs: $...$ inline math, $$...$$
-        // display math, and skipHtmlTags so code blocks aren't typeset.
+        // Read the existing window.MathJax config (set by Moodle's
+        // filter_mathjaxloader configure()) and only fill in sensible
+        // defaults for fields the admin hasn't already configured.
+        // This keeps the plugin fully consistent with whatever MathJax
+        // version / CDN URL / config the admin set on the filter page.
         try {
             var config = window.MathJax || {};
             if (typeof config !== 'object' || Array.isArray(config)) {
                 config = {};
             }
             config.tex = config.tex || {};
-            // Only set inlineMath/displayMath if the admin hasn't already.
-            // This handles both v3/v4 (tex.inlineMath) and v2 (tex2jax.inlineMath).
             if (!config.tex.inlineMath) {
                 config.tex.inlineMath = [['\\(', '\\)'], ['$', '$']];
             }
             if (!config.tex.displayMath) {
                 config.tex.displayMath = [['\\[', '\\]'], ['$$', '$$']];
             }
-            config.tex.processEscapes = true;
-            config.tex.skipHtmlTags = ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'];
-            config.options = config.options || {};
-            config.options.skipHtmlTags = ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'];
+            if (!config.tex.processEscapes) {
+                config.tex.processEscapes = true;
+            }
+            if (!config.tex.skipHtmlTags) {
+                config.tex.skipHtmlTags = ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'];
+            }
             window.MathJax = config;
         } catch (e) {
             console.warn('[Hermes] MathJax config error:', e);

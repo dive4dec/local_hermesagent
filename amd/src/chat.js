@@ -1300,9 +1300,14 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         try {
             if (window.MathJax) {
                 window.MathJax.Hub.Config({
-                    tex2jax: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['\\[', '\\]']] },
+                    tex2jax: {
+                        inlineMath: [['$', '$'], ['\\(', '\\)']],
+                        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                        processEscapes: true
+                    },
                     showProcessingMessages: false,
-                    messageStyle: 'none'
+                    messageStyle: 'none',
+                    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
                 });
             }
         } catch (e) {
@@ -1372,7 +1377,13 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
     /**
      * Render markdown to HTML, protecting math delimiters from marked.js.
-     * Pipeline: protect \[...\] and $$...$$ → render markdown → restore delimiters → post-process links.
+     * Pipeline:
+     *   1. Extract code blocks (inline + fenced) → placeholders
+     *   2. Protect \[...\] and $$...$$ → unicode placeholders (non-code text only)
+     *   3. Render markdown with marked.js
+     *   4. Restore math delimiters
+     *   5. Restore code blocks (after MathJax, so code is never typeset)
+     *   6. Post-process links
      */
     var renderMarkdown = function(text) {
         if (!text || !text.trim()) return Promise.resolve('');
@@ -1384,9 +1395,17 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             var filename = path.split('/').pop();
             return '![' + alt + '](' + M.cfg.wwwroot + '/local/hermesagent/image.php?f=' + encodeURIComponent(filename) + ')';
         });
+        // Step 1: Protect code blocks from math processing
+        var codeStore = [];
+        text = protectCodeBlocks(text, codeStore);
+        // Step 2: Protect math delimiters (non-code text only)
         text = protectMathDelimiters(text);
         return loadMarked().then(function(m) {
+            // Step 3-4: Render markdown, restore math delimiters
             var html = unescapeMathDelimiters(m.parse(text));
+            // Step 5: Restore code blocks
+            html = restoreCodeBlocks(html, codeStore);
+            // Step 6: Post-process links
             return postProcessLinks(html);
         }).catch(function(err) {
             console.error('[Hermes] markdown parse failed:', err);
@@ -1407,6 +1426,47 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         if (!eq) return false;
         return /[=+\-^{}]/.test(eq) || eq.indexOf(BS) !== -1 ||
             /\b(sin|cos|tan|log|frac|sqrt|pi|infty|cdot|times|leq|geq|neq|approx|pm|right|left|lim|sum|int)\b/.test(eq);
+    };
+
+    // -----------------------------------------------------------------------
+    // Code block protection — extract code before math processing so
+    // $$, \[, \] inside code are never treated as math delimiters.
+    // -----------------------------------------------------------------------
+
+    // Use a unique sentinel that marked.js won't mangle and MathJax won't touch.
+    // Format: \u0001CODEBLOCK0\u0001 ... \u0001CODEBLOCK0\u0001
+    var CODE_SENTINEL = String.fromCharCode(1); // SOH — invisible, not in normal text
+
+    var protectCodeBlocks = function(text, store) {
+        // 1. Fenced code blocks: ```lang\n...\n```
+        text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, function(match, lang, code) {
+            var idx = store.length;
+            store.push({ type: 'fenced', lang: lang, code: code });
+            return CODE_SENTINEL + 'CB' + idx + CODE_SENTINEL;
+        });
+        // 2. Inline code: `...`
+        text = text.replace(/`([^`\n]+)`/g, function(match, code) {
+            var idx = store.length;
+            store.push({ type: 'inline', lang: '', code: code });
+            return CODE_SENTINEL + 'CB' + idx + CODE_SENTINEL;
+        });
+        return text;
+    };
+
+    var restoreCodeBlocks = function(html, store) {
+        for (var i = 0; i < store.length; i++) {
+            var placeholder = CODE_SENTINEL + 'CB' + i + CODE_SENTINEL;
+            var item = store[i];
+            var replacement;
+            if (item.type === 'fenced') {
+                var langClass = item.lang ? ' class="language-' + item.lang + '"' : '';
+                replacement = '<pre><code' + langClass + '>' + escapeHtml(item.code) + '</code></pre>';
+            } else {
+                replacement = '<code>' + escapeHtml(item.code) + '</code>';
+            }
+            html = html.split(placeholder).join(replacement);
+        }
+        return html;
     };
 
     var protectMathDelimiters = function(text) {

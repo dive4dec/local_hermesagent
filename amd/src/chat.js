@@ -1296,20 +1296,27 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     var configureMathJax = function() {
         if (mathjaxConfigured) return;
         mathjaxConfigured = true;
-        // MathJax 4 configuration must be set BEFORE the script loads.
-        // Moodle's loader sets window.MathJax = config before loading the script.
-        // If MathJax is already loaded (e.g. by Moodle's own filter), we extend
-        // the existing config; otherwise we set it for the loader to pick up.
+        // Extend the existing window.MathJax config (set by Moodle's
+        // filter_mathjaxloader configure()) rather than replacing it.
+        // This keeps us consistent with whatever MathJax version / CDN
+        // URL the admin configured on the filter settings page.
+        // We only add chat-specific needs: $...$ inline math, $$...$$
+        // display math, and skipHtmlTags so code blocks aren't typeset.
         try {
             var config = window.MathJax || {};
             if (typeof config !== 'object' || Array.isArray(config)) {
                 config = {};
             }
             config.tex = config.tex || {};
-            config.tex.inlineMath = [['\\(', '\\)'], ['$', '$']];
-            config.tex.displayMath = [['\\[', '\\]'], ['$$', '$$']];
+            // Only set inlineMath/displayMath if the admin hasn't already.
+            // This handles both v3/v4 (tex.inlineMath) and v2 (tex2jax.inlineMath).
+            if (!config.tex.inlineMath) {
+                config.tex.inlineMath = [['\\(', '\\)'], ['$', '$']];
+            }
+            if (!config.tex.displayMath) {
+                config.tex.displayMath = [['\\[', '\\]'], ['$$', '$$']];
+            }
             config.tex.processEscapes = true;
-            // MathJax natively skips these tags — no code-block protection needed
             config.tex.skipHtmlTags = ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'];
             config.options = config.options || {};
             config.options.skipHtmlTags = ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'];

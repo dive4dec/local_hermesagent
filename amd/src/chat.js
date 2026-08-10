@@ -1493,7 +1493,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             start = ci + CLOSE.length;
         }
 
-        return convertLegacyDollars(protectBareBrackets(result));
+        return convertLegacyDollars(protectInlineDollars(protectBareBrackets(result)));
     };
 
     var protectBareBrackets = function(text) {
@@ -1528,6 +1528,69 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
                 result += text.substring(oi, ci + 2);
             }
             start = ci + 2;
+        }
+        return result;
+    };
+
+    /**
+     * Protect inline $...$ math using JupyterLab-style smart matching rules:
+     * - Opening $ must be followed by a non-space, non-$ character
+     * - Closing $ must be preceded by a non-space, non-$ character
+     * - $ at start/end of a line is not a delimiter (avoid spanning paragraphs)
+     * - \$ (escaped) is treated as literal dollar, not a delimiter
+     * Runs AFTER code blocks and $$...$$ are already protected, so only
+     * single $ remains in non-code, non-display-math text.
+     */
+    var protectInlineDollars = function(text) {
+        var result = '';
+        var i = 0;
+        while (i < text.length) {
+            // Look for opening $
+            if (text[i] !== '$') {
+                result += text[i];
+                i++;
+                continue;
+            }
+            // Check if escaped \$
+            if (i > 0 && text[i - 1] === BS) {
+                result += '$';
+                i++;
+                continue;
+            }
+            // Opening $ must be followed by non-space, non-$, non-newline
+            if (i + 1 >= text.length || /\s|\$/.test(text[i + 1])) {
+                result += '$';
+                i++;
+                continue;
+            }
+            // Find closing $ — must be preceded by non-space, non-$
+            var closeIdx = -1;
+            for (var j = i + 2; j < text.length; j++) {
+                if (text[j] === '$' && !/\s|\$/.test(text[j - 1])) {
+                    // Check not escaped
+                    if (text[j - 1] !== BS) {
+                        closeIdx = j;
+                        break;
+                    }
+                }
+                // Don't cross double newlines (paragraph boundary)
+                if (text[j] === '\n' && j + 1 < text.length && text[j + 1] === '\n') {
+                    break;
+                }
+            }
+            if (closeIdx === -1) {
+                // No closing $ found — treat as literal
+                result += '$';
+                i++;
+                continue;
+            }
+            var eq = text.substring(i + 1, closeIdx);
+            if (isMathContent(eq.trim())) {
+                result += MATH_OPEN + eq + MATH_CLOSE;
+            } else {
+                result += '$' + eq + '$';
+            }
+            i = closeIdx + 1;
         }
         return result;
     };

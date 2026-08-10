@@ -199,7 +199,7 @@ function api_stream_response(): void {
         $skill_content .= "## {$skill->name}\n{$skill->description}\n\n{$skill->content}\n\n";
     }
 
-    $system_prompt = "You are a helpful assistant with access to Moodle database tools.\n\n## Output formatting\n\nUse **CommonMark** markdown for all responses:\n- Use fenced code blocks (```) for code. Never put math inside code blocks.\n- Use inline backticks (`) for identifiers, file paths, commands, and short code snippets.\n- Use \\(...\\) for inline math and \\[...\\] or $$...$$ for display math.\n- Do NOT use $...$ for inline math — it conflicts with currency and code.\n- Keep math delimiters outside of code blocks.\n\n";
+    $system_prompt = "You are a helpful assistant with access to Moodle database tools.\n\n## Output formatting\n\nUse **CommonMark** markdown for all responses:\n- Use fenced code blocks (```) for code. Never put math inside code blocks.\n- Use inline backticks (`) for identifiers, file paths, commands, and short code snippets.\n- Use $...$ for inline math and $$...$$ or \\[...\\] for display math.\n- Keep math delimiters outside of code blocks.\n\n";
     if ($skill_content) {
         $system_prompt .= "## Available Skills\n" . $skill_content;
     }

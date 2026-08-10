@@ -21,8 +21,10 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
     // Math delimiter placeholders (unicode private-use area)
     var BS = String.fromCharCode(92); // backslash
-    var MATH_OPEN = String.fromCharCode(57344);
+    var MATH_OPEN = String.fromCharCode(57344);       // display math
     var MATH_CLOSE = String.fromCharCode(57345);
+    var MATH_INLINE_OPEN = String.fromCharCode(57346);  // inline math
+    var MATH_INLINE_CLOSE = String.fromCharCode(57347);
 
     // ---------------------------------------------------------------------------
     // Initialization
@@ -1424,8 +1426,14 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
     var isMathContent = function(eq) {
         if (!eq) return false;
-        return /[=+\-^{}]/.test(eq) || eq.indexOf(BS) !== -1 ||
-            /\b(sin|cos|tan|log|frac|sqrt|pi|infty|cdot|times|leq|geq|neq|approx|pm|right|left|lim|sum|int)\b/.test(eq);
+        // Be permissive: anything between $...$ or \[...\] that isn't
+        // obviously prose is treated as math.  Only exclude content that
+        // is clearly not math (long sentences with spaces and no math chars).
+        if (/[=+\-^{}\\]/.test(eq)) return true;
+        if (/\b(sin|cos|tan|log|frac|sqrt|pi|infty|cdot|times|leq|geq|neq|approx|pm|right|left|lim|sum|int|alpha|beta|gamma|delta|theta|lambda|mu|rho|sigma|phi|psi|omega|vec|hat|bar|dot|ddot)\b/.test(eq)) return true;
+        // Short tokens without spaces are likely math (e.g. "x", "n+1", "a_1")
+        if (eq.length <= 30 && !/\s/.test(eq)) return true;
+        return false;
     };
 
     // -----------------------------------------------------------------------
@@ -1493,7 +1501,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             start = ci + CLOSE.length;
         }
 
-        return convertLegacyDollars(protectInlineDollars(protectBareBrackets(result)));
+        return protectInlineDollars(convertLegacyDollars(protectBareBrackets(result)));
     };
 
     var protectBareBrackets = function(text) {
@@ -1586,7 +1594,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             }
             var eq = text.substring(i + 1, closeIdx);
             if (isMathContent(eq.trim())) {
-                result += MATH_OPEN + eq + MATH_CLOSE;
+                result += MATH_INLINE_OPEN + eq + MATH_INLINE_CLOSE;
             } else {
                 result += '$' + eq + '$';
             }
@@ -1596,7 +1604,10 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     };
 
     var unescapeMathDelimiters = function(html) {
-        return html.split(MATH_OPEN).join(BS + '[').split(MATH_CLOSE).join(BS + ']');
+        return html.split(MATH_OPEN).join(BS + '[')
+                   .split(MATH_CLOSE).join(BS + ']')
+                   .split(MATH_INLINE_OPEN).join(BS + '(')
+                   .split(MATH_INLINE_CLOSE).join(BS + ')');
     };
 
     // ---------------------------------------------------------------------------

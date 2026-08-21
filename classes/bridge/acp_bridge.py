@@ -3,15 +3,24 @@
 ACP Bridge — FastAPI server that connects Moodle to `hermes acp`.
 
 Architecture:
-  Moodle browser → api.php → acp_bridge.py (port 9118) → hermes acp subprocess
-                                                                 (real agent loop with MCP)
+  Moodle browser -> api.php -> acp_bridge.py (port 9118) -> hermes acp subprocess
 
-The `hermes acp` subprocess handles the full agent loop internally:
-- Multi-turn tool calling
-- MCP tool execution
-- Conversation management
+Concurrency model (v2):
+  A SINGLE long-lived `hermes acp` process serves MULTIPLE ACP sessions in
+  parallel. The old bridge used one global `_prompt_lock` that serialized every
+  prompt and a nuclear `restart()` on abort. This version:
+    * runs concurrent prompts (different sessions) with no global lock;
+    * serializes only per-ACP-session (two prompts on the same session);
+    * aborts a session with `session/cancel` (proven: returns in ~0.3s,
+      other sessions are untouched — no process restart);
+    * scopes per-user identity to the ACP session id, so two admins chatting
+      at once never cross-attribute uploads/courses. The ACP session id is the
+      same value hermes binds as `HERMES_SESSION_KEY` (a per-session
+      ContextVar) for in-process plugin tools and into the child env for
+      terminal/skill processes.
 
-This bridge just translates between HTTP/SSE and ACP stdio JSON-RPC.
+The bridge speaks the official `acp` Python SDK (ClientSideConnection over
+stdio), NOT hand-rolled JSON-RPC.
 """
 
 import asyncio
@@ -19,12 +28,10 @@ import json
 import logging
 import os
 import queue
-import subprocess
 import sys
 import threading
 import time
 import uuid
-from http import HTTPStatus
 from pathlib import Path
 
 import uvicorn
@@ -53,934 +60,700 @@ log = logging.getLogger("acp_bridge")
 # ---------------------------------------------------------------------------
 HERMES_BIN = Path(os.environ.get("HERMES_HOME", "/tmp")) / "venv" / "bin" / "hermes"
 HERMES_HOME_ENV = os.environ.get("HERMES_HOME", "/tmp")
-ACP_TIMEOUT_SECONDS = float(os.environ.get("ACP_TIMEOUT", "600"))  # 10 min — allows time for tool approval
+ACP_TIMEOUT_SECONDS = float(os.environ.get("ACP_TIMEOUT", "600"))  # 10 min — tool approval
+KEEPALIVE_INTERVAL = float(os.environ.get("BRIDGE_KEEPALIVE", "15"))
 PORT = int(os.environ.get("BRIDGE_PORT", "9118"))
+DEFAULT_CWD = os.environ.get("ACP_CWD", "/var/www/html")
+# Prune per-session identity files older than this (sessions die with the
+# hermes acp process, so orphaned files are safe to remove).
+IDENTITY_TTL = int(os.environ.get("IDENTITY_TTL", "7200"))  # 2h
 
 app = FastAPI(title="Hermes ACP Bridge")
 
+
 # ---------------------------------------------------------------------------
-# Global ACP process manager
+# Small helpers
 # ---------------------------------------------------------------------------
-class ACPProcess:
-    """Manages a long-lived `hermes acp` subprocess."""
+async def _request_json(request: Request) -> dict:
+    try:
+        return await request.json()
+    except Exception:
+        return {}
+
+
+def sse_data(payload: dict) -> str:
+    """Plain `data:` SSE frame (no `event:` name). api.php keys off json['type']."""
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
+def sse_named(name: str, payload: dict) -> str:
+    """Named SSE frame: `event: <name>` + `data: <json>`."""
+    return "event: " + name + "\ndata: " + json.dumps(payload) + "\n\n"
+
+
+def _block_text(content) -> str:
+    """Extract text from an ACP content block (single block or list of blocks)."""
+    if content is None:
+        return ""
+    if isinstance(content, (list, tuple)):
+        parts = []
+        for b in content:
+            t = getattr(b, "text", None)
+            if t:
+                parts.append(t)
+        return "".join(parts)
+    t = getattr(content, "text", None)
+    if t:
+        return t
+    # Resource / embedded-resource fallback
+    uri = getattr(content, "uri", None)
+    return uri or ""
+
+
+def _describe_tool_call(tc):
+    """Build (title, kind, description) for a permission prompt from a ToolCall."""
+    title = getattr(tc, "title", None) or "Unknown tool"
+    kind = getattr(tc, "kind", None) or "execute"
+    desc_parts = []
+    content = getattr(tc, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            old = getattr(item, "old_text", None)
+            new = getattr(item, "new_text", None)
+            if new:
+                desc_parts.append("+ " + str(new).strip())
+            if old:
+                desc_parts.append("- " + str(old).strip())
+            txt = getattr(item, "text", None)
+            if txt:
+                desc_parts.append(str(txt))
+    if not desc_parts:
+        ri = getattr(tc, "raw_input", None)
+        if ri:
+            desc_parts.append(json.dumps(ri, indent=2, default=str)[:2000])
+    return title, kind, "\n".join(desc_parts)
+
+
+# ---------------------------------------------------------------------------
+# ACP Client (the side of the protocol the bridge plays)
+# ---------------------------------------------------------------------------
+class BridgeAcpClient:
+    """Implements the ACP `Client` interface. `hermes acp` (the agent) calls
+    these over stdio; we route streaming updates to per-session queues and
+    resolve permission requests by awaiting futures the HTTP endpoints set."""
+
+    def __init__(self, mgr):
+        self.mgr = mgr
+
+    # -- streaming updates -------------------------------------------------
+    async def session_update(self, session_id, update, **kwargs):
+        self.mgr.dispatch_update(session_id, update)
+
+    # -- permission --------------------------------------------------------
+    async def request_permission(self, options, session_id, tool_call, **kwargs):
+        return await self.mgr.handle_permission(options, session_id, tool_call)
+
+    # -- filesystem (agent may delegate file reads/writes to the client) ---
+    async def read_text_file(self, path, session_id, **kwargs):
+        from acp.schema import ReadTextFileResponse
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return ReadTextFileResponse(content=f.read())
+        except FileNotFoundError:
+            from acp import RequestError
+            raise RequestError.resource_not_found(path)
+        except Exception as e:
+            from acp import RequestError
+            raise RequestError.internal_error({"path": path, "error": str(e)})
+
+    async def write_text_file(self, content, path, session_id, **kwargs):
+        from acp.schema import WriteTextFileResponse
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return WriteTextFileResponse()
+
+    # -- terminal (not delegated; hermes runs its own terminal tool) --------
+    async def create_terminal(self, *args, **kwargs):
+        from acp import RequestError
+        raise RequestError.method_not_found("create_terminal")
+
+    async def terminal_output(self, *args, **kwargs):
+        from acp import RequestError
+        raise RequestError.method_not_found("terminal_output")
+
+    async def release_terminal(self, *args, **kwargs):
+        return None
+
+    async def wait_for_terminal_exit(self, *args, **kwargs):
+        from acp import RequestError
+        raise RequestError.method_not_found("wait_for_terminal_exit")
+
+    async def kill_terminal(self, *args, **kwargs):
+        return None
+
+    # -- extension / connect ----------------------------------------------
+    async def ext_method(self, method, params):
+        from acp import RequestError
+        raise RequestError.method_not_found(method)
+
+    async def ext_notification(self, method, params):
+        pass
+
+    def on_connect(self, conn):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# ACP manager — owns ONE `hermes acp` process + a dedicated asyncio loop
+# ---------------------------------------------------------------------------
+class ACPManager:
+    """Long-lived `hermes acp` process with a background event loop.
+
+    Serves multiple ACP sessions concurrently. Same-session prompts are
+    serialized with a per-session asyncio.Lock; different sessions run in
+    parallel (proven against the live hermes acp).
+    """
 
     def __init__(self):
-        self.proc = None
-        self.inbox = queue.Queue()
-        self.stderr_tail = []
-        self._out_thread = None
-        self._err_thread = None
-        self._next_id = 0
-        self._lock = threading.Lock()
-        self._sessions = {}  # moodle_session_id -> acp_session_id
-        # Abort tracking: moodle_conv_id -> event to set when abort requested
-        self._abort_events = {}  # moodle_conv_id -> threading.Event()
-        # Prompt serialization: hermes acp is a single stdio process that can
-        # only handle one prompt at a time. Without this lock, concurrent
-        # prompts would both read from the shared inbox queue and steal each
-        # other's session/update chunks.
-        self._prompt_lock = threading.Lock()
-        # Track pending permission requests so we can detect stale/expired ones
-        self._pending_permissions = set()  # set of permission_ids (msg ids)
-        self._permission_options = {}    # {permission_id: set(offered optionIds)}
+        self._loop = None
+        self._loop_thread = None
+        self._boot_lock = threading.Lock()
+        self._booted = False
+        self._proc = None
+        self._conn = None
+        self._client = None
 
-    def start(self):
-        """Start the hermes acp subprocess."""
-        log.info("Starting hermes acp subprocess from %s", HERMES_BIN)
+        self._sessions = {}          # moodle_conv_id -> acp_session_id
+        self._session_locks = {}     # acp_session_id -> asyncio.Lock
+        self._active_queue = {}      # acp_session_id -> queue.Queue (current prompt)
+
+        self._perm_lock = threading.Lock()
+        self._next_perm = 0
+        self._pending_perms = {}     # perm_id -> {future, sid, options:set}
+        self._acc = {}               # acp_session_id -> [text, reasoning]
+
+    # -- background loop ---------------------------------------------------
+    def _ensure_loop(self):
+        if self._loop is not None and not self._loop.is_closed():
+            return
+        self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(
+            target=self._run_loop, daemon=True, name="acp-bridge-loop")
+        self._loop_thread.start()
+
+    def _run_loop(self):
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run_async(self, coro, timeout=60):
+        self._ensure_loop()
+        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return fut.result(timeout)
+
+    # -- boot: spawn + connect + initialize --------------------------------
+    async def _boot(self):
+        from acp import PROTOCOL_VERSION, connect_to_agent
+        from acp.schema import (ClientCapabilities, FileSystemCapabilities,
+                                Implementation)
         env = os.environ.copy()
         env["HERMES_HOME"] = HERMES_HOME_ENV
+        self._proc = await asyncio.create_subprocess_exec(
+            str(HERMES_BIN), "acp",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=50 * 1024 * 1024,
+            start_new_session=True,
+            env=env,
+        )
+        self._client = BridgeAcpClient(self)
+        self._conn = connect_to_agent(
+            self._client, self._proc.stdin, self._proc.stdout)
+        await self._conn.initialize(
+            PROTOCOL_VERSION,
+            ClientCapabilities(
+                fs=FileSystemCapabilities(read_text_file=True, write_text_file=True),
+                terminal=False,
+            ),
+            Implementation(name="moodle-bridge", title="Moodle ACP Bridge", version="0.2.0"),
+        )
+        log.info("hermes acp spawned + ACP initialized (pid=%s)", self._proc.pid)
 
-        try:
-            self.proc = subprocess.Popen(
-                [str(HERMES_BIN), "acp"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                env=env,
-            )
-        except FileNotFoundError:
-            log.error("hermes binary not found at %s", HERMES_BIN)
-            raise
+    def ensure_alive(self, timeout=45):
+        """Boot (or re-boot after a crash) the hermes acp process.
 
-        if not self.proc.stdin or not self.proc.stdout:
-            self.proc.kill()
-            raise RuntimeError("hermes acp did not expose stdin/stdout")
-
-        # Start reader threads
-        self._out_thread = threading.Thread(target=self._stdout_reader, daemon=True, name="acp-stdout")
-        self._err_thread = threading.Thread(target=self._stderr_reader, daemon=True, name="acp-stderr")
-        self._out_thread.start()
-        self._err_thread.start()
-
-        # Initialize ACP protocol
-        log.info("Initializing ACP protocol...")
-        resp = self._request("initialize", {
-            "protocolVersion": 1,
-            "clientCapabilities": {},
-            "clientInfo": {
-                "name": "moodle-bridge",
-                "title": "Moodle ACP Bridge",
-                "version": "0.1.0",
-            },
-        }, timeout=30)
-        log.info("ACP initialized, response: %s", resp)
-
-    def restart(self):
-        """Kill the running hermes acp subprocess and start a fresh one.
-
-        hermes acp has no native cancel/session-abort call, so a stopped
-        prompt keeps running in the background, blocking the next prompt
-        ("Queued for the next turn"). To truly interrupt it we recycle
-        the subprocess.
-
-        Thread safety: the SSE generator thread runs in send_prompt_streaming
-        which holds _prompt_lock. After we terminate the process, that thread
-        will detect either (a) abort_event.is_set() → return, or (b)
-        self.proc.poll() is not None → return. Either way it releases
-        _prompt_lock in its finally block. We do NOT wait for the lock here
-        to avoid blocking the event loop — the next prompt simply acquires
-        the lock when the old thread exits (~0.5s).
-        """
-        log.warning("Restarting hermes acp subprocess (abort/interrupt)")
-
-        # Terminate the subprocess. Old reader threads get EOF and exit.
-        try:
-            if self.proc is not None:
-                try:
-                    self.proc.terminate()
-                except Exception as e:
-                    log.error("Error terminating acp proc: %s", e)
-                try:
-                    self.proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        self.proc.kill()
-                    except Exception:
-                        pass
-        except Exception as e:
-            log.error("Error during acp shutdown: %s", e)
-
-        # Clear all conversational state. The SSE generator holds a local
-        # reference to abort_event, so clearing _abort_events doesn't affect
-        # it — it will still see abort_event.is_set() and exit.
-        with self._lock:
+        On reboot all prior ACP session ids are invalid, so we clear the
+        moodle->acp session map (the next prompt creates a fresh session)."""
+        self._ensure_loop()
+        alive = (self._proc is not None and self._proc.returncode is None
+                 and self._conn is not None)
+        if alive:
+            return
+        with self._boot_lock:
+            alive = (self._proc is not None and self._proc.returncode is None
+                     and self._conn is not None)
+            if alive:
+                return
             self._sessions = {}
-            self._abort_events = {}
-            self._pending_permissions = set()
-            self._permission_options = {}
-            self._next_id = 0
+            self._session_locks = {}
+            self._pending_perms = {}
+            self._acc = {}
+            self._active_queue = {}
+            log.info("Booting hermes acp ...")
+            self._run_async(self._boot(), timeout=timeout)
+            self._booted = True
 
-        # Re-init process state and start a fresh subprocess
-        self.inbox = queue.Queue()
-        self.stderr_tail = []
-        self._out_thread = None
-        self._err_thread = None
-        self.start()
-        log.info("hermes acp subprocess restarted")
+    @property
+    def alive(self):
+        return (self._proc is not None and self._proc.returncode is None)
 
-    def _stdout_reader(self):
-        """Read JSON-RPC messages from acp stdout, ignoring non-JSON log lines."""
-        while True:
+    # -- sessions ----------------------------------------------------------
+    def _acp_lock(self, sid):
+        if sid not in self._session_locks:
+            self._session_locks[sid] = asyncio.Lock()
+        return self._session_locks[sid]
+
+    def get_or_create_session(self, moodle_conv_id, cwd=None):
+        """Return (acp_session_id, is_new) for a Moodle conversation."""
+        self.ensure_alive()
+        with self._boot_lock:
+            sid = self._sessions.get(moodle_conv_id)
+            if sid:
+                return sid, False
+
+        from acp.schema import TextContentBlock  # noqa: F401
+        async def _new():
+            sess = await self._conn.new_session(cwd=cwd or DEFAULT_CWD)
+            return sess.session_id
+        sid = self._run_async(_new(), timeout=60)
+        with self._boot_lock:
+            self._sessions[moodle_conv_id] = sid
+        log.info("New ACP session %s for conversation %s", sid, moodle_conv_id)
+        return sid, True
+
+    # -- streaming update dispatch (runs on the asyncio loop) --------------
+    def dispatch_update(self, session_id, update):
+        from acp.schema import (AgentMessageChunk, AgentThoughtChunk,
+                                ToolCallStart, ToolCallProgress)
+        q = self._active_queue.get(session_id)
+        if q is None:
+            return  # no listener (e.g. cancelled) — drop
+        kind = type(update).__name__
+
+        if isinstance(update, AgentMessageChunk):
+            text = _block_text(update.content)
+            if not text:
+                return
+            acc = self._acc.setdefault(session_id, ["", ""])
+            acc[0] += text
+            q.put({"type": "message", "delta": text, "full": acc[0]})
+        elif isinstance(update, AgentThoughtChunk):
+            text = _block_text(update.content)
+            if not text:
+                return
+            acc = self._acc.setdefault(session_id, ["", ""])
+            acc[1] += text
+            q.put({"type": "reasoning", "delta": text, "full": acc[1]})
+        elif isinstance(update, (ToolCallStart, ToolCallProgress)):
+            content = getattr(update, "content", None)
+            parts = []
+            if isinstance(content, list):
+                for it in content:
+                    t = getattr(it, "text", None)
+                    if t:
+                        parts.append(str(t))
+            q.put({"type": "tool_call", "tool_call": {
+                "title": getattr(update, "title", "") or "tool",
+                "kind": getattr(update, "kind", "") or "other",
+                "status": getattr(update, "status", "") or "pending",
+                "toolcall_id": getattr(update, "tool_call_id", ""),
+                "result_text": "\n".join(parts),
+                "session_update": "tool_call" if isinstance(update, ToolCallStart)
+                                  else "tool_call_update",
+            }})
+        # other update types (plan, modes, usage, commands) — not forwarded
+
+    # -- permission (runs on the asyncio loop) -----------------------------
+    async def handle_permission(self, options, session_id, tool_call):
+        from acp.schema import RequestPermissionResponse, AllowedOutcome, DeniedOutcome
+        title, kind, desc = _describe_tool_call(tool_call)
+        with self._perm_lock:
+            self._next_perm += 1
+            perm_id = self._next_perm
+            fut = asyncio.get_running_loop().create_future()
+            offered = {getattr(o, "option_id", "") for o in (options or [])}
+            self._pending_perms[perm_id] = {"future": fut, "sid": session_id,
+                                            "options": offered}
+        q = self._active_queue.get(session_id)
+        if q is not None:
+            q.put({"type": "permission", "permission_id": perm_id, "title": title,
+                   "description": desc, "kind": kind, "options": [
+                       getattr(o, "option_id", "") for o in (options or [])]})
+        try:
+            selected = await asyncio.wait_for(fut, timeout=ACP_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+        finally:
+            with self._perm_lock:
+                self._pending_perms.pop(perm_id, None)
+
+        # The /session/permission endpoint already validated `selected` against
+        # the offered options and applied the allow_once fallback before calling
+        # resolve_permission(), so we just build the outcome here.
+        if selected and selected != "deny":
+            log.info("Permission %s approved (%s)", perm_id, selected)
+            return RequestPermissionResponse(outcome=AllowedOutcome(option_id=selected, outcome="selected"))
+        log.info("Permission %s denied by user", perm_id)
+        return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+
+    # -- prompt (scheduled on the loop; streams via queue) -----------------
+    async def _run_prompt(self, sid, text, q):
+        from acp.schema import TextContentBlock
+        lock = self._acp_lock(sid)
+        async with lock:
+            self._acc[sid] = ["", ""]
             try:
-                line = self.proc.stdout.readline()
-                if not line:
-                    log.warning("ACP stdout EOF - process may have exited")
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    msg = json.loads(line)
-                    log.debug("ACP stdout JSON-RPC: %s", json.dumps(msg, default=str)[:500])
-                    self.inbox.put(msg)
-                except json.JSONDecodeError:
-                    # hermes acp writes INFO log lines to stdout too — skip them
-                    log.debug("ACP stdout non-JSON (log line): %s", line[:300])
-                    continue
+                resp = await self._conn.prompt(
+                    [TextContentBlock(text=text, type="text")], session_id=sid)
+                sr = getattr(resp, "stop_reason", "end_turn")
+                if sr == "cancelled":
+                    q.put({"type": "aborted", "message": "Response stopped by user"})
+                else:
+                    q.put({"type": "done", "stop_reason": sr})
+            except asyncio.CancelledError:
+                q.put({"type": "aborted", "message": "Response stopped by user"})
+                raise
             except Exception as e:
-                log.error("Error reading ACP stdout: %s", e)
-                break
+                log.exception("Prompt failed for session %s", sid)
+                q.put({"type": "error", "error": str(e)})
 
-    def _stderr_reader(self):
-        """Read stderr from acp process."""
-        while True:
-            try:
-                line = self.proc.stderr.readline()
-                if not line:
-                    break
-                self.stderr_tail.append(line.strip())
-                if len(self.stderr_tail) > 100:
-                    self.stderr_tail.pop(0)
-                if self.stderr_tail[-1]:
-                    log.debug("ACP stderr: %s", self.stderr_tail[-1][:200])
-            except Exception as e:
-                log.error("Error reading ACP stderr: %s", e)
-                break
+    def start_prompt(self, sid, text):
+        """Kick off a prompt for session `sid`; return its queue.Queue.
 
-    def _inc_id(self):
-        with self._lock:
-            self._next_id += 1
-            return self._next_id
+        The queue is where streaming updates + the terminal done/aborted/error
+        event land. Callers read it in a generator thread."""
+        self.ensure_alive()
+        q = queue.Queue()
+        self._active_queue[sid] = q
+        self._ensure_loop()
+        asyncio.run_coroutine_threadsafe(self._run_prompt(sid, text, q), self._loop)
+        return q
 
-    def _send_jsonrpc(self, msg):
-        """Write a JSON-RPC message to the ACP process stdin."""
-        self.proc.stdin.write(json.dumps(msg) + "\n")
-        self.proc.stdin.flush()
-
-    def _send_jsonrpc_error(self, msg_id, code, message):
-        """Send a JSON-RPC error response to the ACP process."""
-        self._send_jsonrpc({
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "error": {"code": code, "message": message},
-        })
-
-    def _request(self, method, params, timeout=60, text_parts=None, reasoning_parts=None, session_id_filter=None):
-        """Send a JSON-RPC request and wait for response.
-
-        Returns (result, text_parts, reasoning_parts) where parts accumulate
-        session/update notifications.
-        """
-        request_id = self._inc_id()
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": params,
-        }
-        log.info("ACP request %d: %s", request_id, json.dumps(payload, default=str)[:500])
-
-        self.proc.stdin.write(json.dumps(payload) + "\n")
-        self.proc.stdin.flush()
-
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.proc.poll() is not None:
-                stderr = "\n".join(self.stderr_tail[-20:])
-                raise RuntimeError(f"ACP process exited early. stderr:\n{stderr}")
-
-            try:
-                msg = self.inbox.get(timeout=0.1)
-            except queue.Empty:
-                continue
-
-            # Handle notifications (no id) and session/update
-            notif = self._handle_notification(msg, text_parts, reasoning_parts, session_id_filter)
-            if notif:
-                continue
-
-            # Look for our response
-            if msg.get("id") == request_id:
-                if "error" in msg:
-                    raise RuntimeError(f"ACP error: {msg['error']}")
-                log.info("ACP response %d: %s", request_id, json.dumps(msg.get("result", {}), default=str)[:500])
-                return msg.get("result"), text_parts, reasoning_parts
-
-        raise TimeoutError(f"Timed out waiting for ACP response to {method}")
-
-    def _handle_notification(self, msg, text_parts, reasoning_parts, session_id_filter):
-        """Handle notifications during _request(). Returns True if consumed.
-
-        Only called from the non-streaming _request() path (initialize, session/new).
-        The streaming send_prompt_streaming() path handles notifications itself.
-        """
-        method = msg.get("method")
-
-        # session/update notifications — accumulate text/reasoning
-        if method == "session/update":
-            params = msg.get("params", {})
-            update = params.get("update", {})
-            kind = str(update.get("sessionUpdate", "")).strip()
-            content = update.get("content", {})
-            text = str(content.get("text", "")) if isinstance(content, dict) else ""
-
-            if kind == "agent_message_chunk" and text and text_parts is not None:
-                text_parts.append(text)
-            elif kind == "agent_thought_chunk" and text and reasoning_parts is not None:
-                reasoning_parts.append(text)
+    def resolve_permission(self, perm_id, option_id):
+        """Set the user's decision for a pending permission (HTTP endpoint)."""
+        with self._perm_lock:
+            entry = self._pending_perms.get(perm_id)
+        if not entry:
+            return False
+        fut = entry["future"]
+        try:
+            self._loop.call_soon_threadsafe(fut.set_result, option_id)
             return True
-
-        # session/request_permission — not expected during initialize/session/new;
-        # let the caller handle it if it arrives
-        if method == "session/request_permission":
+        except Exception as e:
+            log.error("resolve_permission(%s) failed: %s", perm_id, e)
             return False
 
-        # Unknown requests with an id — respond with error
-        msg_id = msg.get("id")
-        if msg_id is not None and method and "/" in method:
-            log.warning("Unhandled ACP method in _request: %s (id=%s)", method, msg_id)
-            self._send_jsonrpc_error(msg_id, -32601, f"Method '{method}' not supported")
+    def permission_exists(self, perm_id):
+        with self._perm_lock:
+            return perm_id in self._pending_perms
 
-        return False
+    def permission_options(self, perm_id):
+        with self._perm_lock:
+            e = self._pending_perms.get(perm_id)
+            return set(e["options"]) if e else set()
 
-    def create_session(self, cwd=None):
-        """Create a new ACP session. Returns session_id."""
-        if cwd is None:
-            cwd = "/var/www/html"
-        result, _, _ = self._request("session/new", {
-            "cwd": cwd,
-            "mcpServers": [],  # MCP servers registered via Hermes config
-        }, timeout=30)
-        session_id = result.get("sessionId")
-        log.info("Created ACP session: %s", session_id)
-        return session_id
-
-    def load_session(self, session_id, cwd=None):
-        """Load an existing ACP session by ID. Returns result or None if not found."""
-        # NOTE: session/load often fails because hermes acp can't recreate the
-        # agent for old sessions ("Failed to recreate agent"). We keep this method
-        # for future use but currently don't rely on it.
-        if cwd is None:
-            cwd = "/var/www/html"
+    def cancel_session(self, sid):
+        """Abort one session via session/cancel (no process restart)."""
+        self._ensure_loop()
+        if not self.alive:
+            return False
         try:
-            result, _, _ = self._request("session/load", {
-                "cwd": cwd,
-                "sessionId": session_id,
-                "mcpServers": [],
-            }, timeout=30)
-            log.info("Loaded ACP session: %s", session_id)
-            return result
-        except RuntimeError as e:
-            log.warning("session/load failed for %s: %s", session_id, e)
-            return None
-
-    def send_prompt_streaming(self, session_id, prompt_text, timeout=None, abort_event=None):
-        """Send a prompt and yield SSE events as they arrive from the agent.
-
-        This reads from the shared inbox and yields events for this specific
-        prompt request, allowing real-time SSE streaming.
-        """
-        if timeout is None:
-            timeout = ACP_TIMEOUT_SECONDS
-
-        # Build prompt blocks
-        prompt_blocks = [{"type": "text", "text": prompt_text}]
-
-        # Generate unique request ID
-        request_id = self._inc_id()
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "session/prompt",
-            "params": {
-                "sessionId": session_id,
-                "prompt": prompt_blocks,
-            },
-        }
-        log.info("Sending prompt request %d to session %s", request_id, session_id)
-
-        self.proc.stdin.write(json.dumps(payload) + "\n")
-        self.proc.stdin.flush()
-
-        # No deadline — the ACP adapter imposes its own timeout on approval
-        # requests (future.result(timeout=ACP_APPROVAL_TIMEOUT) in permissions.py),
-        # and the agent loop has max_turns.  Removing the bridge deadline avoids
-        # a competing timer that kills the SSE stream while the user is still
-        # deciding on an approval.  The loop exits on: final response (done),
-        # process exit, or user abort.
-        accumulated_text = ""
-        accumulated_reasoning = ""
-        done = False
-        last_keepalive = 0.0  # monotonic timestamp of last keepalive sent
-
-        while not done:
-            if self.proc.poll() is not None:
-                stderr = "\n".join(self.stderr_tail[-20:])
-                log.error("ACP process exited! stderr:\n%s", stderr)
-                self._pending_permissions.clear()
-                self._permission_options.clear()
-                yield {
-                    "type": "error",
-                    "error": f"ACP process exited. stderr: {stderr}",
-                    "text": accumulated_text,
-                    "reasoning": accumulated_reasoning,
-                }
-                return
-
-            try:
-                msg = self.inbox.get(timeout=0.5)
-            except queue.Empty:
-                # Check abort during the 0.5s wait gap
-                if abort_event and abort_event.is_set():
-                    self._pending_permissions.clear()
-                    self._permission_options.clear()
-                    return
-                # Send SSE keepalive comment while waiting — during long LLM API
-                # calls (30–90s) and during permission approval waits.  Without
-                # this, the K8s ingress proxy_read_timeout (60s default) kills
-                # the idle connection → "Connection error".
-                now = time.monotonic()
-                if now - last_keepalive >= 15:
-                    last_keepalive = now
-                    yield {"type": "keepalive"}
-                continue
-            # Skip messages for other requests
-            msg_id = msg.get("id")
-            method = msg.get("method")
-
-            # Filter session/update notifications by session_id — after an abort,
-            # hermes acp keeps running the old prompt and sends session/update
-            # messages for the old session. These must be discarded so they don't
-            # pollute the next prompt's stream.
-            if method == "session/update":
-                params = msg.get("params", {})
-                msg_session_id = params.get("sessionId", "")
-                if msg_session_id and msg_session_id != session_id:
-                    log.debug("Discarding session/update from other session %s (expected %s)",
-                              msg_session_id, session_id)
-                    continue
-                update = params.get("update", {})
-                kind = str(update.get("sessionUpdate", "")).strip()
-                content = update.get("content", {})
-                text = ""
-                if isinstance(content, dict):
-                    text = str(content.get("text", ""))
-
-                if kind == "agent_message_chunk" and text:
-                    accumulated_text += text
-                    log.debug("agent_message_chunk (%d total): %s", len(accumulated_text), text[:100])
-                    yield {
-                        "type": "message",
-                        "delta": text,
-                        "full": accumulated_text,
-                    }
-                elif kind == "agent_thought_chunk" and text:
-                    accumulated_reasoning += text
-                    log.debug("agent_thought_chunk (%d total): %s", len(accumulated_reasoning), text[:100])
-                    yield {
-                        "type": "reasoning",
-                        "delta": text,
-                        "full": accumulated_reasoning,
-                    }
-                elif kind in ("tool_call", "tool_call_update"):
-                    # Forward tool call info to the browser so the user can see
-                    # what tools the agent is using and their results (e.g.
-                    # moodle_upload_file returns a download link).
-                    tc_title = update.get("title", "")
-                    tc_kind = update.get("kind", "")
-                    tc_status = update.get("status", "")
-                    tc_toolcall_id = update.get("toolCallId", "")
-                    # Extract result text from content items
-                    tc_text_parts = []
-                    content_items = update.get("content", [])
-                    if isinstance(content_items, list):
-                        for item in content_items:
-                            if isinstance(item, dict):
-                                ic = item.get("content", {})
-                                if isinstance(ic, dict) and ic.get("text"):
-                                    tc_text_parts.append(ic["text"])
-                                elif isinstance(item, dict) and item.get("text"):
-                                    tc_text_parts.append(item["text"])
-                    elif isinstance(content_items, dict):
-                        ic = content_items.get("content", {})
-                        if isinstance(ic, dict) and ic.get("text"):
-                            tc_text_parts.append(ic["text"])
-
-                    yield {
-                        "type": "tool_call",
-                        "tool_call": {
-                            "title": tc_title,
-                            "kind": tc_kind,
-                            "status": tc_status,
-                            "toolcall_id": tc_toolcall_id,
-                            "result_text": "\n".join(tc_text_parts),
-                            "session_update": kind,
-                        },
-                    }
-                continue
-
-            # Handle session/request_permission - forward to browser for approval
-            if method == "session/request_permission" and msg_id is not None:
-                params = msg.get("params", {})
-                options = params.get("options", [])
-                # Extract tool call info — ACP uses "toolCall" not "call"
-                tc = params.get("toolCall", {})
-                raw = tc.get("rawInput", {})
-                tool_name = raw.get("tool", "unknown")
-                tool_args = raw.get("arguments", {})
-                call_kind = tc.get("kind", "execute")
-                content_items = tc.get("content", [])
-
-                # Build title from rawInput
-                if tool_args.get("path"):
-                    call_title = f"{tool_name}: {tool_args['path']}"
-                elif tool_args.get("command"):
-                    cmd = tool_args["command"]
-                    call_title = f"{tool_name}: {cmd[:120]}"
-                else:
-                    call_title = tool_name
-
-                # Build a readable description
-                desc_parts = []
-                for item in content_items:
-                    if isinstance(item, dict):
-                        item_type = item.get("type", "")
-                        if item_type == "diff":
-                            old = item.get("oldText", "")
-                            new = item.get("newText", "")
-                            if new:
-                                desc_parts.append(f"+ {new.strip()}")
-                            if old:
-                                desc_parts.append(f"- {old.strip()}")
-                        elif item_type == "content":
-                            ic = item.get("content", {})
-                            if isinstance(ic, dict):
-                                desc_parts.append(ic.get("text", ""))
-                        elif "text" in item:
-                            desc_parts.append(item["text"])
-                # If no description from content, use raw arguments
-                if not desc_parts and tool_args:
-                    desc_parts.append(json.dumps(tool_args, indent=2, default=str)[:2000])
-
-                log.info("Forwarding permission request %s to browser: %s", msg_id, call_title)
-
-                # Yield a permission event to the browser
-                self._pending_permissions.add(msg_id)
-                # Store the offered options so /session/permission can validate
-                self._permission_options[msg_id] = {
-                    opt.get("optionId", "") for opt in options
-                    if isinstance(opt, dict)
-                }
-                yield {
-                    "type": "permission",
-                    "permission_id": msg_id,
-                    "title": call_title,
-                    "kind": call_kind,
-                    "description": "\n".join(desc_parts),
-                    "options": options,
-                }
-                continue
-
-            # Handle fs/* and terminal/* requests
-            if msg_id is not None and method and "/" in method:
-                log.warning("Unhandled ACP method in stream: %s (id=%s)", method, msg_id)
-                self._send_jsonrpc_error(msg_id, -32601, f"Method '{method}' not supported")
-                continue
-
-            # Look for our response (has matching id)
-            if msg_id == request_id:
-                self._pending_permissions.clear()
-                if "error" in msg:
-                    log.error("ACP error: %s", msg["error"])
-                    yield {
-                        "type": "error",
-                        "error": str(msg["error"]),
-                        "text": accumulated_text,
-                        "reasoning": accumulated_reasoning,
-                    }
-                else:
-                    log.info("Got final response for request %d", request_id)
-                    yield {
-                        "type": "done",
-                        "text": accumulated_text,
-                        "reasoning": accumulated_reasoning,
-                        "result": msg.get("result", {}),
-                    }
-                done = True
-
-        if not done:
-            # Loop exited without a final response — process died or user aborted.
-            self._pending_permissions.clear()
+            self._run_async(self._conn.cancel(sid), timeout=10)
+            return True
+        except Exception as e:
+            log.warning("cancel(%s) failed: %s", sid, e)
+            return False
 
 
 # Singleton
-acp = ACPProcess()
+acp = ACPManager()
+
 
 # ---------------------------------------------------------------------------
-# FastAPI endpoints
+# FastAPI endpoints (HTTP/SSE contract is unchanged from v1 — api.php works)
 # ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-def startup():
-    """Start the ACP subprocess on boot."""
-    try:
-        acp.start()
-        log.info("=== ACP Bridge started on port %d ===", PORT)
-    except Exception as e:
-        log.error("Failed to start ACP bridge: %s", e, exc_info=True)
-        raise
-
-
 @app.get("/health")
 def health():
-    """Health check — does NOT block on the prompt lock."""
-    if acp.proc and acp.proc.poll() is None:
-        return {"status": "ok", "acp_running": True}
-    return {"status": "degraded", "acp_running": False}
+    acp.ensure_alive()
+    return {"status": "ok", "acp_running": acp.alive}
 
 
 @app.get("/status")
 def status():
-    """Detailed status including prompt lock state."""
-    lock_locked = acp._prompt_lock.locked()
-    acp_alive = acp.proc is not None and acp.proc.poll() is None
+    acp.ensure_alive()
     return {
-        "status": "ok" if acp_alive else "degraded",
-        "acp_running": acp_alive,
-        "prompt_in_progress": lock_locked,
+        "status": "ok" if acp.alive else "degraded",
+        "acp_running": acp.alive,
         "sessions": len(acp._sessions),
+        "active_prompts": len(acp._active_queue),
         "pid": os.getpid(),
     }
 
 
 @app.post("/session/new")
 async def session_new(request: Request):
-    """Create a new ACP session for a conversation."""
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    session_id = acp.create_session(cwd=body.get("cwd"))
-    moodle_conv_id = body.get("conversationid", str(uuid.uuid4())[:8])
-    acp._sessions[moodle_conv_id] = session_id
-    log.info("Session mapping: moodle=%s -> acp=%s", moodle_conv_id, session_id)
-
-    return {
-        "session_id": session_id,
-        "moodle_conv_id": moodle_conv_id,
-    }
+    body = await _request_json(request)
+    moodle_conv_id = body.get("conversationid") or str(uuid.uuid4())[:8]
+    sid, _ = acp.get_or_create_session(moodle_conv_id, cwd=body.get("cwd"))
+    return {"session_id": sid, "moodle_conv_id": moodle_conv_id}
 
 
 @app.post("/session/prompt")
 async def session_prompt(request: Request):
-    """Send a prompt and stream response as SSE."""
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
+    body = await _request_json(request)
     conversationid = body.get("conversationid", "")
     prompt_text = body.get("message", "")
     system_prompt = body.get("system_prompt", "")
     messages = body.get("messages", [])
-    stored_acp_session_id = body.get("acp_session_id", "")
 
-    # Moodle user identity — written to a file so the moodle-bridge plugin can
-    # read it during tool calls. The shared Hermes subprocess is single-threaded
-    # (prompts are serialized via _prompt_lock), so a file is safe here.
+    # 1) Scope this admin's identity to the ACP session (concurrency-safe).
+    #    The ACP session id is the same value hermes binds as HERMES_SESSION_KEY
+    #    for in-process plugin tools and into terminal/skill child env.
     moodle_username = body.get("moodle_username", "")
     moodle_userid = body.get("moodle_userid", "")
-    if moodle_username:
-        identity_file = Path(HERMES_HOME_ENV) / ".moodle_identity"
-        try:
-            identity_file.write_text(
-                json.dumps({"username": moodle_username, "userid": moodle_userid})
-            )
-        except Exception as exc:
-            log.warning("Failed to write moodle identity file: %s", exc)
+    msession = body.get("msession")  # dict from api.php (cookie + moodle_url)
 
-    log.info("=== New prompt: conversationid=%s, prompt_len=%d ===", conversationid, len(prompt_text))
+    # Get / create the ACP session for this conversation.
+    sid, is_new = acp.get_or_create_session(conversationid)
+    _write_identity(sid, moodle_username, moodle_userid, msession)
 
-    # Get or create ACP session for this conversation
-    is_new_session = False
-    if conversationid not in acp._sessions:
-        # No in-memory mapping — bridge was restarted or this is a new conversation.
-        # Always create a fresh ACP session. We don't use session/load because
-        # hermes acp often can't recreate the agent for old sessions.
-        # Instead, if there's conversation history, it will be included in the
-        # first prompt so the agent has context.
-        acp_session_id = acp.create_session()
-        acp._sessions[conversationid] = acp_session_id
-        is_new_session = True
-        log.info("Created new ACP session %s for conversation %s (is_new=%s)",
-                 acp_session_id, conversationid, is_new_session)
-    else:
-        acp_session_id = acp._sessions[conversationid]
-        log.info("Reusing ACP session %s for conversation %s", acp_session_id, conversationid)
+    log.info("=== New prompt: conversationid=%s acp=%s new=%s len=%d ===",
+             conversationid, sid, is_new, len(prompt_text))
 
-    # Build prompt text — include system prompt.
-    # On new sessions (bridge restart or first message), include conversation
-    # history so the agent has context. On subsequent prompts, the ACP session
-    # maintains history internally with automatic compaction.
-    # History is limited to recent messages by api.php (MAX_HISTORY_MESSAGES)
-    # to avoid context window overflow on long conversations.
-    if system_prompt and is_new_session and messages:
-        MAX_HISTORY_CHARS = 50000  # Safety net: ~12K tokens
-        history_text = ""
+    # 2) Build the prompt (history + system prompt on new sessions only).
+    if system_prompt and is_new and messages:
+        max_chars = 50000
+        hist = ""
         truncated = False
         for m in messages:
             role = m.get("role", "")
             content = m.get("content", "")
             entry = f"{'User' if role == 'user' else 'Assistant'}: {content}\n\n"
-            if len(history_text) + len(entry) > MAX_HISTORY_CHARS:
+            if len(hist) + len(entry) > max_chars:
                 truncated = True
                 break
-            history_text += entry
+            hist += entry
         if truncated:
-            history_text = f"[Note: earlier messages omitted — showing most recent {len(history_text.split('User:'))-1 + len(history_text.split('Assistant:'))-2} messages]\n\n" + history_text
-        full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[/SYSTEM]\n\n[CONVERSATION HISTORY]\n{history_text}[/CONVERSATION HISTORY]\n\n{prompt_text}"
+            hist = f"[Note: earlier messages omitted]\n\n" + hist
+        full = (f"[SYSTEM]\n{system_prompt}\n\n[/SYSTEM]\n\n"
+                f"[CONVERSATION HISTORY]\n{hist}[/CONVERSATION HISTORY]\n\n{prompt_text}")
     elif system_prompt:
-        full_prompt = f"[SYSTEM]\n{system_prompt}\n\n[/SYSTEM]\n\n{prompt_text}"
+        full = f"[SYSTEM]\n{system_prompt}\n\n[/SYSTEM]\n\n{prompt_text}"
     else:
-        full_prompt = prompt_text
+        full = prompt_text
 
-    log.info("Sending full prompt (len=%d) to ACP session %s", len(full_prompt), acp_session_id)
-
-    # Create abort event for this conversation
-    abort_event = threading.Event()
-    acp._abort_events[conversationid] = abort_event
+    q = acp.start_prompt(sid, full)
 
     def event_generator():
-        aborted = False
-        # Serialize prompts: hermes acp is a single stdio process. Only one
-        # prompt can read from the shared inbox at a time, or chunks mix.
-        # The lock is released when the generator is exhausted or GC'd.
-        acquired = acp._prompt_lock.acquire(blocking=True, timeout=300)
-        if not acquired:
-            data = {"type": "error", "error": "Another request is in progress (timeout waiting for lock)"}
-            yield f"event: error\\ndata: {json.dumps(data)}\\n\\n"
-            return
+        last_keep = time.monotonic()
         try:
-            for event in acp.send_prompt_streaming(acp_session_id, full_prompt, abort_event=abort_event):
-                # Check if user requested abort
-                if abort_event.is_set() and not aborted:
-                    aborted = True
-                    log.info("User requested abort for conversation %s", conversationid)
-                    # Drain any messages already in the inbox so the next
-                    # prompt doesn't pick up leftover chunks from this one.
-                    # hermes acp doesn't support session/cancel, so it keeps
-                    # running in the background, but send_prompt_streaming
-                    # filters by session_id so stale messages from the old
-                    # session won't be processed by the next prompt.
-                    drained = 0
-                    while True:
-                        try:
-                            acp.inbox.get_nowait()
-                            drained += 1
-                        except queue.Empty:
-                            break
-                    log.info("Drained %d stale messages from inbox after abort", drained)
-                    data = {"type": "aborted", "message": "Response stopped by user"}
-                    yield f"event: aborted\ndata: {json.dumps(data)}\n\n"
-                    return
-
-                event_type = event.get("type", "unknown")
-                log.debug("Event type: %s", event_type)
-
-                if event_type == "keepalive":
-                    # SSE comment — keeps the connection alive through K8s ingress
-                    # proxy_read_timeout (60s default) during long waits (e.g. permission
-                    # approval).  Comments are ignored by EventSource listeners.
-                    yield ": keepalive\n\n"
+            while True:
+                try:
+                    ev = q.get(timeout=0.5)
+                except queue.Empty:
+                    if time.monotonic() - last_keep >= KEEPALIVE_INTERVAL:
+                        last_keep = time.monotonic()
+                        yield ": keepalive\n\n"
                     continue
-
-                if event_type == "message":
-                    text = event.get("delta", "")
-                    full = event.get("full", "")
-                    data = {
-                        "delta": text,
-                        "full": full,
-                        "type": "message",
-                        "session_id": acp_session_id,
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
-
-                elif event_type == "reasoning":
-                    text = event.get("delta", "")
-                    full = event.get("full", "")
-                    data = {
-                        "delta": text,
-                        "full": full,
-                        "type": "reasoning",
-                        "session_id": acp_session_id,
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
-
-                elif event_type == "tool_call":
-                    # Forward tool call info to browser (tool started, completed, etc.)
-                    tc = event.get("tool_call", {})
-                    data = {
-                        "type": "tool_call",
-                        "tool_call": tc,
-                        "session_id": acp_session_id,
-                    }
-                    yield f"event: tool_call\ndata: {json.dumps(data)}\n\n"
-
-                elif event_type == "permission":
-                    # Forward permission request to browser for approval
-                    perm_id = event.get("permission_id")
-                    title = event.get("title", "Unknown tool")
-                    desc = event.get("description", "")
-                    kind = event.get("kind", "execute")
-                    log.info("Forwarding permission request %s: %s", perm_id, title)
-                    data = {
+                ev_type = ev.get("type")
+                if ev_type == "message":
+                    yield sse_data({"delta": ev.get("delta", ""), "full": ev.get("full", ""),
+                                    "type": "message", "session_id": sid})
+                elif ev_type == "reasoning":
+                    yield sse_data({"delta": ev.get("delta", ""), "full": ev.get("full", ""),
+                                    "type": "reasoning", "session_id": sid})
+                elif ev_type == "tool_call":
+                    yield sse_named("tool_call", {"type": "tool_call",
+                                                  "tool_call": ev.get("tool_call", {}),
+                                                  "session_id": sid})
+                elif ev_type == "permission":
+                    log.info("Forwarding permission %s: %s", ev.get("permission_id"), ev.get("title"))
+                    yield sse_named("permission", {
                         "type": "permission",
-                        "permission_id": perm_id,
-                        "title": title,
-                        "description": desc,
-                        "kind": kind,
-                        "session_id": acp_session_id,
-                    }
-                    yield f"event: permission\ndata: {json.dumps(data)}\n\n"
-
-                elif event_type == "done":
-                    # Content and reasoning were already streamed via session/update chunks.
-                    # Just signal completion — do NOT re-send content.
-                    log.info("Sent done event")
-                    data = {
-                        "type": "done",
-                        "session_id": acp_session_id,
-                    }
-                    yield f"event: done\ndata: {json.dumps(data)}\n\n"
-
-                elif event_type == "error":
-                    text = event.get("text", "")
-                    error = event.get("error", "Unknown error")
-                    log.error("ACP error: %s", error)
-
-                    if text:
-                        data = {
-                            "delta": text,
-                            "full": text,
-                            "type": "message",
-                        }
-                        yield f"data: {json.dumps(data)}\n\n"
-
-                    data = {
-                        "type": "error",
-                        "error": error,
-                    }
-                    yield f"event: error\ndata: {json.dumps(data)}\n\n"
-
-                elif event_type == "timeout":
-                    text = event.get("text", "")
-                    reasoning = event.get("reasoning", "")
-                    log.warning("ACP timed out, partial text=%d, reasoning=%d", len(text), len(reasoning))
-
-                    if text:
-                        data = {"delta": text, "full": text, "type": "message"}
-                        yield f"data: {json.dumps(data)}\n\n"
-
-                    data = {"type": "timeout", "error": "Request timed out"}
-                    yield f"event: timeout\ndata: {json.dumps(data)}\n\n"
-
+                        "permission_id": ev.get("permission_id"),
+                        "title": ev.get("title", "Unknown tool"),
+                        "description": ev.get("description", ""),
+                        "kind": ev.get("kind", "execute"),
+                        "session_id": sid,
+                    })
+                elif ev_type == "done":
+                    yield sse_named("done", {"type": "done", "session_id": sid})
+                    return
+                elif ev_type == "aborted":
+                    yield sse_named("aborted", {"type": "aborted",
+                                                "message": ev.get("message", "Response stopped by user")})
+                    return
+                elif ev_type == "error":
+                    yield sse_named("error", {"type": "error", "error": ev.get("error", "Unknown error")})
+                    return
         except Exception as e:
             log.error("Event generator error: %s", e, exc_info=True)
-            data = {"type": "error", "error": str(e)}
-            yield f"data: {json.dumps(data)}\\n\\n"
+            yield sse_data({"type": "error", "error": str(e)})
         finally:
-            acp._prompt_lock.release()
+            acp._active_queue.pop(sid, None)
+            acp._acc.pop(sid, None)
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"},
     )
 
 
 @app.post("/session/permission")
 async def session_permission(request: Request):
-    """Respond to a permission request — approve or reject.
-
-    Body fields:
-        permission_id: int  — the JSON-RPC id from session/request_permission
-        outcome: str        — one of "allow_once" (default), "allow_session",
-                              "allow_always", "deny"
-
-    For backwards compatibility, ``approved: true`` maps to ``allow_once``
-    and ``approved: false`` maps to ``deny``.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
+    body = await _request_json(request)
     permission_id = body.get("permission_id")
     if permission_id is None:
         return {"status": "error", "message": "permission_id required"}
-
-    if not acp.proc or acp.proc.poll() is not None:
+    if not acp.alive:
         return {"status": "error", "message": "ACP process not running"}
+    if not acp.permission_exists(permission_id):
+        return {"status": "error",
+                "message": "This permission request has expired — the agent may have timed out or moved on. Please send a new message to continue."}
 
-    if permission_id not in acp._pending_permissions:
-        return {"status": "error", "message": "This permission request has expired — the agent may have timed out or moved on. Please send a new message to continue."}
+    outcome = body.get("outcome")
+    if outcome is None:
+        outcome = "allow_once" if body.get("approved", False) else "deny"
 
-    # Resolve the outcome: explicit outcome string > approved bool > default
-    outcome_str = body.get("outcome")
-    if outcome_str is None:
-        outcome_str = "allow_once" if body.get("approved", False) else "deny"
-
-    # Validate the outcome against the options the ACP actually offered.
-    # Edit approvals (write_file/patch) only offer allow_once + deny;
-    # sending allow_session/allow_always there would be rejected by the ACP.
-    offered = acp._permission_options.get(permission_id, set())
-    if outcome_str != "deny" and offered and outcome_str not in offered:
-        # Fall back to allow_once if available, rather than leaving the
-        # permission request unanswered.  This avoids the situation where
-        # the user clicks "Approve session" on a tool that only supports
-        # allow_once and nothing happens at all.
+    # Validate against offered options; fall back to allow_once if not offered.
+    offered = acp.permission_options(permission_id)
+    if outcome != "deny" and offered and outcome not in offered:
         if "allow_once" in offered:
-            log.info(
-                "Permission %s: requested '%s' not available, "
-                "falling back to allow_once",
-                permission_id, outcome_str,
-            )
-            outcome_str = "allow_once"
+            log.info("Permission %s: '%s' not offered, falling back to allow_once",
+                     permission_id, outcome)
+            outcome = "allow_once"
         else:
             allowed = ", ".join(sorted(offered - {"deny"})) or "none"
-            return {
-                "status": "error",
-                "message": f"This permission request only supports: {allowed}. "
-                           f"Requested '{outcome_str}' is not available for this tool.",
-            }
+            return {"status": "error",
+                    "message": f"This permission request only supports: {allowed}. "
+                               f"Requested '{outcome}' is not available for this tool."}
 
-    # Map outcome to ACP JSON-RPC result
-    if outcome_str in ("allow_once", "allow_session", "allow_always"):
-        result = {"outcome": {"outcome": "selected", "optionId": outcome_str}}
-        log.info("Permission %s %s by user", permission_id, outcome_str)
-    else:
-        result = {"outcome": {"outcome": "cancelled"}}
-        log.info("Permission %s denied by user", permission_id)
-
-    response = {
-        "jsonrpc": "2.0",
-        "id": permission_id,
-        "result": result,
-    }
-    acp._send_jsonrpc(response)
-    acp._pending_permissions.discard(permission_id)
-    acp._permission_options.pop(permission_id, None)
-    return {"status": "ok", "outcome": outcome_str}
-
-
-@app.get("/sessions")
-def list_sessions():
-    """List active sessions (debug)."""
-    return {
-        "sessions": acp._sessions,
-        "acp_running": acp.proc is not None and acp.proc.poll() is None,
-    }
+    ok = acp.resolve_permission(permission_id, outcome)
+    if not ok:
+        return {"status": "error", "message": "Failed to resolve permission"}
+    log.info("Permission %s -> %s", permission_id, outcome)
+    return {"status": "ok", "outcome": outcome}
 
 
 @app.post("/session/abort")
 async def session_abort(request: Request):
-    """Abort the current streaming response for a conversation."""
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
+    """Abort one conversation's stream. session/cancel — NO process restart,
+    so other admins' in-flight prompts keep streaming untouched."""
+    body = await _request_json(request)
     conversationid = body.get("conversationid", "")
-    if conversationid in acp._abort_events:
-        acp._abort_events[conversationid].set()
-        log.info("Abort signal sent for conversation %s", conversationid)
-        # Recycle the hermes acp subprocess. Without this, the stopped
-        # prompt keeps running in the background and blocks the next one.
+    with acp._boot_lock:
+        sid = acp._sessions.get(conversationid)
+    if not sid:
+        return {"status": "ok", "aborted": False, "message": "No active stream for this conversation"}
+    ok = acp.cancel_session(sid)
+    log.info("Abort session %s (conversation %s) -> %s", sid, conversationid, ok)
+    return {"status": "ok", "aborted": True}
+
+
+@app.get("/sessions")
+def list_sessions():
+    with acp._boot_lock:
+        sessions = dict(acp._sessions)
+    return {"sessions": sessions, "acp_running": acp.alive}
+
+
+# ---------------------------------------------------------------------------
+# Per-session identity files (concurrency-safe — keyed by ACP session id)
+# ---------------------------------------------------------------------------
+def _identity_dir():
+    d = Path(HERMES_HOME_ENV) / "run"
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        d.chmod(0o770)
+    except Exception:
+        pass
+    return d
+
+
+def _write_identity(sid, username, userid, msession):
+    """Write per-session identity files under $HERMES_HOME/run/identity/.
+
+    * `<sid>.identity.json` — {username, userid}  -> read by moodle-bridge plugin
+    * `<sid>.msession.json` — moodle cookie + url  -> read by moodle_quiz_audit skill
+    Also write the legacy single .moodle_identity for backward compat (harmless;
+    the plugin now prefers the per-session file)."""
+    try:
+        d = _identity_dir() / "identity"
+        d.mkdir(parents=True, exist_ok=True)
         try:
-            acp.restart()
-        except Exception as e:
-            log.error("Failed to restart acp after abort: %s", e, exc_info=True)
-        return {"status": "ok", "aborted": True}
-    return {"status": "ok", "aborted": False, "message": "No active stream for this conversation"}
+            d.chmod(0o770)
+        except Exception:
+            pass
+        if username:
+            (d / f"{sid}.identity.json").write_text(
+                json.dumps({"username": username, "userid": userid}))
+            (d / f"{sid}.identity.json").chmod(0o660)
+            # legacy single file (last-writer) for any old reader
+            try:
+                legacy = Path(HERMES_HOME_ENV) / ".moodle_identity"
+                legacy.write_text(json.dumps({"username": username, "userid": userid}))
+                legacy.chmod(0o660)
+            except Exception:
+                pass
+        if isinstance(msession, dict) and msession.get("cookie_value"):
+            (d / f"{sid}.msession.json").write_text(json.dumps(msession))
+            (d / f"{sid}.msession.json").chmod(0o660)
+    except Exception as e:
+        log.warning("Failed to write per-session identity for %s: %s", sid, e)
+
+
+def prune_stale_identity():
+    """Remove per-session identity files older than IDENTITY_TTL (sessions die
+    with the hermes acp process, so old files are orphaned)."""
+    try:
+        d = Path(HERMES_HOME_ENV) / "run" / "identity"
+        if not d.is_dir():
+            return
+        now = time.time()
+        for f in d.glob("*.json"):
+            try:
+                if now - f.stat().st_mtime > IDENTITY_TTL:
+                    f.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Startup / main
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+def startup():
+    log.info("Starting ACP Bridge (v2 concurrent) on port %d ...", PORT)
+    try:
+        acp.ensure_alive()
+        log.info("=== ACP Bridge started on port %d ===", PORT)
+    except Exception as e:
+        log.error("Failed to start ACP bridge: %s", e, exc_info=True)
+        raise
+    # Background identity-file janitor (every 30 min)
+    def _janitor():
+        while True:
+            time.sleep(1800)
+            prune_stale_identity()
+    threading.Thread(target=_janitor, daemon=True, name="identity-janitor").start()
 
 
 if __name__ == "__main__":
-    log.info("Starting ACP Bridge on port %d...", PORT)
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="debug")

@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.5.9] — 2026-08-21
+
+### Added
+- **Per-session ACP concurrency (bridge rewrite).** `acp_bridge.py` now runs
+  concurrent prompts across different ACP sessions with no global lock — only
+  same-session prompts are serialized. Per-session `conn.cancel()` replaces the
+  old "nuclear restart" on abort, so stopping one user's prompt no longer
+  restarts the ACP for everyone. Each session gets its own lock, its own output
+  queue, and its own permission routing.
+- **Per-session identity (concurrency-safe).** `api.php` now passes the
+  logged-in admin's Moodle session (`msession`: cookie + url + userid) into the
+  bridge. The bridge writes a PER-SESSION identity file
+  (`$HERMES_HOME/run/identity/<acp_session_id>.identity.json`, TTL-pruned by a
+  janitor) so two concurrent admins each resolve their own identity. This is the
+  mechanism the new `moodle_audit_quiz` plugin tool reads (see
+  `local_hermes-synapse`).
+- **acp integrity check in `bootstrap.sh`.** Bootstrap now verifies the `acp`
+  package is importable/functional in the live venv before declaring the bridge
+  healthy, surfacing a broken install early instead of at first prompt.
+
+### Fixed
+- **Cross-session identity race.** The previous single shared
+  `$HERMES_HOME/.moodle_identity` (and the terminal-child `HERMES_SESSION_KEY`
+  env) let concurrent admin sessions clobber each other. In-process tools now
+  scope identity to the ACP session id; the child-process `moodle_quiz_audit`
+  skill path that was unreliable under concurrency has been removed (superseded
+  by the in-process `moodle_audit_quiz` tool).
+
 ## [0.5.8] — 2026-08-10
 
 ### Fixed

@@ -204,6 +204,36 @@ function api_stream_response(): void {
         $system_prompt .= "## Available Skills\n" . $skill_content;
     }
 
+    // Build the user's Moodle session cookie data. The bridge writes this to a
+    // PER-SESSION file ($HERMES_HOME/run/identity/<acp_session_id>.msession.json)
+    // so concurrent admins each use their own Moodle session (no cross-attribution).
+    // We also keep writing the legacy single $HERMES_HOME/run/msession.json for
+    // backward compatibility with older bridge/skill versions.
+    $hermes_home = getenv('HERMES_HOME') ?: '/var/www/moodledata/.hermes';
+    $run_dir = $hermes_home . '/run';
+    if (!is_dir($run_dir)) {
+        @mkdir($run_dir, 0770, true);
+    }
+    $session_cookie_name = session_name();
+    $session_cookie_value = $_COOKIE[$session_cookie_name] ?? '';
+    $msession_data = null;
+    if ($session_cookie_value) {
+        $msession_data = [
+            'cookie_name' => $session_cookie_name,
+            'cookie_value' => $session_cookie_value,
+            'domain' => parse_url($CFG->wwwroot, PHP_URL_HOST),
+            'path' => $CFG->sessioncookiepath ?: '/',
+            'moodle_url' => $CFG->wwwroot,
+            'userid' => $USER->id,
+            'username' => $USER->username,
+            'written_at' => time(),
+        ];
+        // Legacy shared file (fallback for older skill versions)
+        $msession_file = $run_dir . '/msession.json';
+        @file_put_contents($msession_file, json_encode($msession_data));
+        @chmod($msession_file, 0600);
+    }
+
     // Build request to ACP bridge
     // The ACP session maintains conversation history internally with automatic
     // compaction (archive_and_compact) — old messages are summarized, not lost.
@@ -218,36 +248,8 @@ function api_stream_response(): void {
         'messages' => $history,
         'moodle_username' => $USER->username,
         'moodle_userid' => $USER->id,
+        'msession' => $msession_data,
     ];
-    
-    // Write the user's Moodle session cookie to a file so Python skills can
-    // make authenticated HTTP requests to Moodle as this user. This is a
-    // generic capability — any skill that needs Moodle HTTP access can read
-    // $HERMES_HOME/run/msession.json. The bridge is single-threaded (one
-    // active prompt at a time), so a single file is safe and gets
-    // overwritten on each request. File is 0600, owned by www-data.
-    $hermes_home = getenv('HERMES_HOME') ?: '/var/www/moodledata/.hermes';
-    $run_dir = $hermes_home . '/run';
-    if (!is_dir($run_dir)) {
-        @mkdir($run_dir, 0770, true);
-    }
-    $session_cookie_name = session_name();
-    $session_cookie_value = $_COOKIE[$session_cookie_name] ?? '';
-    if ($session_cookie_value) {
-        $msession_file = $run_dir . '/msession.json';
-        $msession_data = [
-            'cookie_name' => $session_cookie_name,
-            'cookie_value' => $session_cookie_value,
-            'domain' => parse_url($CFG->wwwroot, PHP_URL_HOST),
-            'path' => $CFG->sessioncookiepath ?: '/',
-            'moodle_url' => $CFG->wwwroot,
-            'userid' => $USER->id,
-            'username' => $USER->username,
-            'written_at' => time(),
-        ];
-        @file_put_contents($msession_file, json_encode($msession_data));
-        @chmod($msession_file, 0600);
-    }
 
     // CRITICAL: Release session and flush buffers BEFORE any output
     ignore_user_abort(true);

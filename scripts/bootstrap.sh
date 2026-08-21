@@ -281,6 +281,56 @@ if [ -f "$PLUGIN_DIR/scripts/patch_acp_timeout.py" ]; then
         echo "  WARNING: ACP timeout patch failed (non-fatal)"
 fi
 
+# ACP SDK integrity check — the bridge depends on the `acp` package's public
+# API (connect_to_agent + the Client/ClientSideConnection methods). We do NOT
+# pin a version: instead we verify the API surface the bridge actually needs and
+# self-heal with a targeted reinstall of the [acp] extra if a hermes upgrade
+# dropped or renamed any of it. This catches a silent break before first chat.
+echo "  Verifying ACP SDK integrity..."
+if "$HERMES_HOME/venv/bin/python" - << 'ACPCHK'
+import sys
+try:
+    import acp
+except Exception as e:
+    print("  acp package missing: %s" % e); sys.exit(1)
+import inspect
+from acp import connect_to_agent, PROTOCOL_VERSION
+from acp.interfaces import Client
+from acp.client.connection import ClientSideConnection
+from acp import schema
+need_client = ["session_update", "request_permission", "read_text_file",
+               "write_text_file"]
+need_conn = ["initialize", "new_session", "prompt", "cancel"]
+missing = [m for m in need_client if not callable(getattr(Client, m, None))]
+missing += [m for m in need_conn if not callable(getattr(ClientSideConnection, m, None))]
+for s in ["ClientCapabilities", "FileSystemCapabilities", "Implementation",
+          "ReadTextFileResponse", "WriteTextFileResponse",
+          "TextContentBlock", "AgentMessageChunk", "AgentThoughtChunk",
+          "ToolCallStart", "ToolCallProgress", "RequestPermissionResponse",
+          "AllowedOutcome", "DeniedOutcome"]:
+    if not hasattr(schema, s):
+        missing.append("schema." + s)
+# RequestError lives in acp (acp.exceptions), NOT acp.schema
+try:
+    from acp import RequestError as _RE
+    for cm in ["resource_not_found", "internal_error", "method_not_found"]:
+        if not callable(getattr(_RE, cm, None)):
+            missing.append("RequestError." + cm)
+except Exception as e:
+    missing.append("acp.RequestError (%s)" % e)
+if missing:
+    print("  ACP API surface incomplete, missing: %s" % ", ".join(missing))
+    sys.exit(1)
+print("  acp SDK: OK (api surface present)")
+ACPCHK
+then
+    :
+else
+    echo "  Reinstalling hermes-agent[acp] to restore ACP API..."
+    "$UV_BIN" pip install --python "$VENV_PYTHON" --upgrade --force-reinstall \
+        "hermes-agent[acp]" 2>&1 || echo "  WARNING: acp reinstall failed"
+fi
+
 # Install MCP server script
 if [ -f "$PLUGIN_DIR/scripts/moodle_db_mcp.py" ]; then
     rm -f "$HERMES_HOME/mcp_servers/moodle_db_mcp.py"

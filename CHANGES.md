@@ -7,6 +7,35 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.11] — 2026-08-21
+
+### Fixed
+
+#### Bootstrap: synapse plugin tarball fallback no longer depends on archive dir name
+
+Two latent bugs in `scripts/bootstrap.sh` step 7 (the fallback that installs
+`local_hermes-synapse` plugins when git clone is unavailable/fails):
+
+1. **Silent zero-plugin install on renamed repo/branch.** The fallback globs
+   `/tmp/local_hermes-synapse-main/plugins/*/` — a path that a plain
+   `tar -xzf ... -C /tmp/` only populated by coincidence of GitHub baking the
+   archive's top dir as `<repo>-<branch>/`. Rename the repo (or ever branch
+   off `main`) and the glob matched nothing: zero plugins installed, no
+   warning. Now the archive is extracted into a controlled directory with
+   `--strip-components=1` (top dir stripped, so `plugins/` lands where the
+   glob expects regardless of name) and a missing `plugins/` dir produces a
+   visible `WARNING` instead of a silent no-op.
+2. **Fresh HERMES_HOME lost all plugin files.** `cp -r <plugin>
+   $HERMES_HOME/plugins/` silently fails when `$HERMES_HOME/plugins` does not
+   exist yet (`cp -r` creates only the final path component). Added
+   `mkdir -p $HERMES_HOME/plugins` before the copy.
+
+Verified on the live edb phpfpm pod with the real step-7 code, a real GitHub
+tarball, and git broken to force the fallback: `moodle-bridge` installed to
+`plugins/moodle-bridge/` with `plugin.yaml` present, `plugins enable` fired,
+temp files cleaned up; rename-resistance experiment shows old logic discovers
+nothing on a renamed archive while the fix discovers the plugin.
+
 ## [0.5.10] — 2026-08-21
 
 ### Fixed

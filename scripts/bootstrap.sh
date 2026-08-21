@@ -577,16 +577,26 @@ if [ -x "$HERMES_BIN" ]; then
     if [ -z "$PLUGIN_NAMES" ]; then
         echo "  Git unavailable or failed — using tarball fallback..."
         curl -sL "https://github.com/${SYNAPSE_REPO}/archive/refs/heads/main.tar.gz" -o "$SYNAPSE_TARBALL"
-        if tar -xzf "$SYNAPSE_TARBALL" -C /tmp/ 2>/dev/null; then
-            for plugin_dir in "$SYNAPSE_EXTRACT"/plugins/*/; do
-                [ -f "${plugin_dir}plugin.yaml" ] || continue
-                plugin_name=$(basename "$plugin_dir")
-                PLUGIN_NAMES="$PLUGIN_NAMES $plugin_name"
-                echo "  Installing plugin: $plugin_name (via tarball)..."
-                rm -rf "$HERMES_HOME/plugins/$plugin_name"
-                cp -r "$plugin_dir" "$HERMES_HOME/plugins/"
-                echo "  Plugin: $plugin_name installed via tarball"
-            done
+        # Extract into a controlled dir and strip the archive's top
+        # "<repo>-<branch>/" level, so plugin discovery does NOT depend on the
+        # repo/branch name that GitHub bakes into the archive dir.
+        rm -rf "$SYNAPSE_EXTRACT"
+        mkdir -p "$SYNAPSE_EXTRACT"
+        if tar -xzf "$SYNAPSE_TARBALL" -C "$SYNAPSE_EXTRACT" --strip-components=1 2>/dev/null; then
+            if [ ! -d "$SYNAPSE_EXTRACT/plugins" ]; then
+                echo "  WARNING: no plugins/ dir in $SYNAPSE_REPO archive — no plugins installed"
+            else
+                for plugin_dir in "$SYNAPSE_EXTRACT"/plugins/*/; do
+                    [ -f "${plugin_dir}plugin.yaml" ] || continue
+                    plugin_name=$(basename "$plugin_dir")
+                    PLUGIN_NAMES="$PLUGIN_NAMES $plugin_name"
+                    echo "  Installing plugin: $plugin_name (via tarball)..."
+                    rm -rf "$HERMES_HOME/plugins/$plugin_name"
+                    mkdir -p "$HERMES_HOME/plugins"
+                    cp -r "$plugin_dir" "$HERMES_HOME/plugins/"
+                    echo "  Plugin: $plugin_name installed via tarball"
+                done
+            fi
         else
             echo "  WARNING: Failed to download $SYNAPSE_REPO — no plugins installed"
         fi

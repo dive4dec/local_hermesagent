@@ -7,6 +7,50 @@ Format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.10] — 2026-08-21
+
+### Fixed
+
+#### Tool-call transcript is now durable + visible, and navigation no longer strands prompts
+
+Four related defects in the tool-call pipeline (bridge → SSE → api.php → DB →
+chat.js), all fixed together:
+
+1. **Expandable tool-call box showed nothing.** The bridge never forwarded the
+   tool's command/args, and the frontend box was only wired to render the
+   (empty-at-start) result. The bridge now sends `input_text` (the command) and
+   `output_text`/`result_text`, and `chat.js` renders a **command** section and
+   a **result** section inside the `<details>` box.
+   - Root cause of the empty `input_text`: hermes ACP carries the command in the
+     `ToolCallStart` event's nested `ContentToolCallContent.content →
+     TextContentBlock.text` (not in `raw_input`). `_block_text()` now unwraps
+     that nested shape (recursively) so the command actually comes through.
+
+2. **Tool calls vanished after switching/reloading a conversation.** `api.php`
+   only ever persisted `content`, never the `tool_calls`/`tool_results` columns,
+   and the history endpoint omitted them. `api.php` now persists the tool-call
+   transcript **incrementally** (on each tool event, via
+   `_hermesagent_persist_assistant()`), and `get_history()` returns `tool_calls`
+   so a reload re-renders the command + result boxes.
+
+3. **Leaving mid-conversation stranded the prompt.** `ignore_user_abort(true)`
+   meant a switch/reload kept the ACP prompt running; if it hit a permission
+   gate the button was lost (stream-only) and the prompt hung until the 600 s
+   timeout. `api.php` now fires `_hermesagent_abort()` on
+   `connection_aborted()`, and the bridge's `cancel_session()` was hardened: a
+   bare `session/cancel` does **not** release a prompt parked at a permission
+   gate, so it now also denies the pending permission (unblocking the agent to
+   stop) and drops the active-queue entry so `active_prompts` is accurate.
+
+### Verified (real path, in-pod)
+- terminal tool: `input_text="$ echo VERIFIED_V1"`, `result_text` = real output.
+- write_file: command shows target; diff shows in the permission box; approve
+  mid-stream → `done`.
+- `persist_assistant`: real DB insert + read-back + upsert (no duplicate row).
+- auto-abort: stranded prompt → `active_prompts` 1→0 immediately; bridge stays
+  healthy; a fresh prompt on another conversation works after the abort.
+
+
 ## [0.5.7] — 2026-07-29
 
 ### Added

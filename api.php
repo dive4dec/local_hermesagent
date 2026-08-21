@@ -288,7 +288,7 @@ function api_stream_response(): void {
         CURLOPT_RETURNTRANSFER => false,
         CURLOPT_HEADER => false,
         CURLOPT_TIMEOUT => 600,  // 10 min — allows time for tool approval
-        CURLOPT_WRITEFUNCTION => function($curl, $data) use ($conversationid, $DB, $req_id) {
+        CURLOPT_WRITEFUNCTION => function($curl, $data) use ($conversationid, $DB, $req_id, $bridge_url) {
             _hermes_log('api_stream_response: Received ' . strlen($data) . ' bytes from bridge');
             static $assistant_content = '';
             static $reasoning_content = '';
@@ -296,6 +296,8 @@ function api_stream_response(): void {
             static $acp_session_saved = false;
             static $sse_buffer = '';
             static $event_type = '';
+            static $tool_calls = [];
+            static $aborted_sent = false;
             
             // Append to buffer and process complete SSE events (delimited by \n\n).
             // curl WRITEFUNCTION delivers data in arbitrary chunks; a large SSE
@@ -381,12 +383,39 @@ function api_stream_response(): void {
                     flush();
                 }
                 
-                // Handle tool_call events — forward to browser so user can
-                // see what tools the agent is using (e.g. moodle_upload_file
-                // results with download links).
+                // Handle tool_call events — forward to browser AND persist so the
+                // transcript survives reload / conversation switch.
                 if ($etype === 'tool_call') {
+                    $tc = $json['tool_call'] ?? $json;
+                    if (!empty($tc['toolcall_id'])) {
+                        $tool_calls[$tc['toolcall_id']] = $tc;
+                        // Persist now (not just at done) so a reload / switch /
+                        // crash mid-turn still shows the tool calls.
+                        _hermesagent_persist_assistant($DB, $conversationid,
+                            $assistant_content, $reasoning_content, $tool_calls,
+                            $message_id, $req_id);
+                    }
                     echo "event: tool_call\ndata: " . json_encode($json) . "\n\n";
                     flush();
+                }
+
+                // FIX 4: if the browser left (switched conversation / closed the
+                // tab) while the prompt is still running, abort it in the bridge
+                // so nothing is stranded waiting at a permission gate and no
+                // tokens/GPU are wasted on a stream nobody is watching.
+                if (!$aborted_sent && connection_aborted()) {
+                    $aborted_sent = true;
+                    _hermes_log("[$req_id] CLIENT DISCONNECTED (conversation $conversationid) -> aborting prompt + saving partial");
+                    _hermesagent_abort($bridge_url, $conversationid, $req_id);
+                    // Flush whatever we've collected so far so it's not lost.
+                    if (trim($assistant_content) === '' && !empty($reasoning_content)) {
+                        $assistant_content = $reasoning_content;
+                    }
+                    _hermesagent_persist_assistant($DB, $conversationid,
+                        $assistant_content, $reasoning_content, $tool_calls,
+                        $message_id, $req_id);
+                    // Stop pulling from the bridge.
+                    return strlen($data);
                 }
 
                 // Handle done event
@@ -399,22 +428,11 @@ function api_stream_response(): void {
                         $assistant_content = $reasoning_content;
                     }
                     
-                    // Save to DB
-                    if ($assistant_content && $message_id === null) {
-                        $rec = new stdClass();
-                        $rec->conversationid = $conversationid;
-                        $rec->role = 'assistant';
-                        $rec->content = $assistant_content;
-                        $rec->timemodified = time();
-                        $message_id = $DB->insert_record('local_hermesagent_messages', $rec);
-                    } elseif ($assistant_content && $message_id) {
-                        $rec = $DB->get_record('local_hermesagent_messages', ['id' => $message_id]);
-                        if ($rec) {
-                            $rec->content = $assistant_content;
-                            $DB->update_record('local_hermesagent_messages', $rec);
-                        }
-                    }
-                    
+                    // Save to DB (upsert — content + all tool calls + results).
+                    _hermesagent_persist_assistant($DB, $conversationid,
+                        $assistant_content, $reasoning_content, $tool_calls,
+                        $message_id, $req_id);
+
                     flush();
                     return strlen($data);
                 }
@@ -607,4 +625,80 @@ function send_json_response(array $data): void {
     header('Content-Type: application/json');
     echo json_encode($data);
     die();
+}
+
+/**
+ * Persist the in-progress assistant turn (content + tool calls + results) to
+ * the DB, creating the message row on first call and updating it thereafter.
+ *
+ * This runs on EVERY tool_call (not just at 'done') so a conversation switch,
+ * page reload, or mid-turn crash still leaves a durable transcript.
+ *
+ * @param object      $DB            Moodle DML (has {local_hermesagent_messages})
+ * @param int         $conversationid
+ * @param string      $content       accumulated assistant text (may be '')
+ * @param string      $reasoning     accumulated reasoning text (fallback)
+ * @param array       $tool_calls    map of toolcall_id => tool_call object
+ * @param int|null    $message_id    existing row id, or null to insert
+ * @param string      $req_id        log correlation id
+ * @return int|null  the (possibly new) message row id
+ */
+function _hermesagent_persist_assistant($DB, $conversationid, $content, $reasoning, array $tool_calls, $message_id, $req_id) {
+    $content = ($content !== null && $content !== '') ? $content : ($reasoning ?? '');
+    if (trim($content) === '' && empty($tool_calls)) {
+        return $message_id; // nothing to persist yet
+    }
+    $tool_json = empty($tool_calls) ? null : json_encode(array_values($tool_calls), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    try {
+        if ($message_id) {
+            $rec = $DB->get_record('local_hermesagent_messages', ['id' => $message_id]);
+            if ($rec) {
+                $rec->content = $content;
+                if ($tool_json !== null) {
+                    $rec->tool_calls = $tool_json;
+                }
+                $rec->timemodified = time();
+                $DB->update_record('local_hermesagent_messages', $rec);
+                _hermes_log("[$req_id] persist assistant msg $message_id (content=" . strlen($content) . " tools=" . count($tool_calls) . ")");
+                return $message_id;
+            }
+        }
+        $newrec = new stdClass();
+        $newrec->conversationid = $conversationid;
+        $newrec->role = 'assistant';
+        $newrec->content = $content;
+        if ($tool_json !== null) {
+            $newrec->tool_calls = $tool_json;
+        }
+        $newrec->timemodified = time();
+        $newid = $DB->insert_record('local_hermesagent_messages', $newrec);
+        _hermes_log("[$req_id] created assistant msg $newid (content=" . strlen($content) . " tools=" . count($tool_calls) . ")");
+        return $newid;
+    } catch (\Throwable $e) {
+        _hermes_log("[$req_id] WARNING: persist_assistant failed: " . $e->getMessage());
+        return $message_id;
+    }
+}
+
+/**
+ * Tell the bridge to abort this conversation's in-flight prompt (FIX 4) so a
+ * client that left the page doesn't leave a prompt stranded at a permission
+ * gate. Fire-and-forget, 5 s cap — never blocks the disconnect path long.
+ */
+function _hermesagent_abort($bridge_url, $conversationid, $req_id) {
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $bridge_url . '/session/abort',
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(['conversationid' => $conversationid]),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT => 5,
+    ]);
+    $resp = @curl_exec($ch);
+    $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    _hermes_log("[$req_id] abort sent for conversation $conversationid (http=" . $http . " err=" . ($err ?: 'none') . " resp=" . ($resp ?: 'none') . ")");
 }

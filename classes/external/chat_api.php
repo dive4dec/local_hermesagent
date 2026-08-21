@@ -100,12 +100,18 @@ if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_sys
 
         $result = [];
         foreach ($messages as $msg) {
-            $result[] = [
+            $entry = [
                 'id' => $msg->id,
                 'role' => $msg->role,
                 'content' => $msg->content,
                 'timemodified' => $msg->timemodified,
             ];
+            // Include the tool-call transcript (JSON text) so history reload can
+            // render the command + result boxes that were only transient before.
+            if (!empty($msg->tool_calls)) {
+                $entry['tool_calls'] = $msg->tool_calls;
+            }
+            $result[] = $entry;
         }
 
         return ['messages' => $result];
@@ -118,6 +124,7 @@ if (!is_siteadmin($USER) && !has_capability('local/hermesagent:use', context_sys
                 'role' => new external_value(PARAM_ALPHA, 'Role: user, assistant, tool'),
                 'content' => new external_value(PARAM_RAW, 'Message content'),
                 'timemodified' => new external_value(PARAM_INT, 'Timestamp'),
+                'tool_calls' => new external_value(PARAM_RAW, 'Tool calls as JSON text', VALUE_DEFAULT, null),
             ])),
         ]);
     }

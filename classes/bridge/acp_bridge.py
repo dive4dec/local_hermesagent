@@ -92,19 +92,26 @@ def sse_named(name: str, payload: dict) -> str:
 
 
 def _block_text(content) -> str:
-    """Extract text from an ACP content block (single block or list of blocks)."""
+    """Extract text from an ACP content block (single block or list of blocks).
+
+    Handles the nested tool-call shape hermes actually emits:
+        [ContentToolCallContent(content=TextContentBlock(text=...), type='content')]
+    as well as a bare block / list of bare blocks.
+    """
     if content is None:
         return ""
+    if isinstance(content, str):
+        return content
     if isinstance(content, (list, tuple)):
-        parts = []
-        for b in content:
-            t = getattr(b, "text", None)
-            if t:
-                parts.append(t)
-        return "".join(parts)
+        return "".join(_block_text(b) for b in content)
     t = getattr(content, "text", None)
     if t:
         return t
+    # Unwrap a ContentToolCallContent / similar wrapper whose payload lives in
+    # its `.content` field (the real TextContentBlock is nested one level down).
+    inner = getattr(content, "content", None)
+    if inner is not None:
+        return _block_text(inner)
     # Resource / embedded-resource fallback
     uri = getattr(content, "uri", None)
     return uri or ""
@@ -132,6 +139,34 @@ def _describe_tool_call(tc):
         if ri:
             desc_parts.append(json.dumps(ri, indent=2, default=str)[:2000])
     return title, kind, "\n".join(desc_parts)
+
+
+def _raw_io_text(value) -> str:
+    """Render a tool's raw_input / raw_output (arbitrary JSON) as displayable
+    text for the collapsible tool-call box. A dict of kwargs is shown as
+    'key: value' lines (commands/paths readable at a glance); a list of
+    arguments is shown as a space-joined command line; anything else falls
+    back to compact JSON. Empty/None → '' so the frontend omits the section."""
+    if value is None or value == "" or value == [] or value == {}:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        # e.g. terminal command args: ["git", "status"] → "git status"
+        parts = [str(v) for v in value]
+        return " ".join(parts)
+    if isinstance(value, dict):
+        # e.g. {"command": "...", "workdir": "..."} or {"path": "...", "content": "..."}
+        lines = []
+        for k, v in value.items():
+            if isinstance(v, (dict, list)):
+                v = json.dumps(v, default=str)
+            lines.append(f"{k}: {v}")
+        return "\n".join(lines)
+    try:
+        return json.dumps(value, indent=2, default=str)
+    except Exception:
+        return str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -359,20 +394,31 @@ class ACPManager:
             q.put({"type": "reasoning", "delta": text, "full": acc[1]})
         elif isinstance(update, (ToolCallStart, ToolCallProgress)):
             content = getattr(update, "content", None)
-            parts = []
-            if isinstance(content, list):
-                for it in content:
-                    t = getattr(it, "text", None)
-                    if t:
-                        parts.append(str(t))
+            content_text = _block_text(content).strip()
+            is_start = isinstance(update, ToolCallStart)
+            raw_in = getattr(update, "raw_input", None)
+            raw_out = getattr(update, "raw_output", None)
+            if is_start:
+                # Command / arguments. hermes does NOT populate raw_input — it
+                # carries the command in the *start* event's content text
+                # (e.g. "$ echo x" for terminal, the write target for edit).
+                # Prefer structured raw_input if a different agent ever sets it.
+                input_text = _raw_io_text(raw_in) or content_text
+                result_text = ""
+            else:
+                # Result. hermes carries it in the *progress* event's content
+                # text (e.g. "terminal result\n- **output:** ... \n- **exit_code:** 0").
+                result_text = _raw_io_text(raw_out) or content_text
+                input_text = ""
             q.put({"type": "tool_call", "tool_call": {
                 "title": getattr(update, "title", "") or "tool",
                 "kind": getattr(update, "kind", "") or "other",
                 "status": getattr(update, "status", "") or "pending",
                 "toolcall_id": getattr(update, "tool_call_id", ""),
-                "result_text": "\n".join(parts),
-                "session_update": "tool_call" if isinstance(update, ToolCallStart)
-                                  else "tool_call_update",
+                "result_text": result_text,
+                "input_text": input_text,
+                "output_text": result_text,
+                "session_update": "tool_call" if is_start else "tool_call_update",
             }})
         # other update types (plan, modes, usage, commands) — not forwarded
 
@@ -466,16 +512,52 @@ class ACPManager:
             return set(e["options"]) if e else set()
 
     def cancel_session(self, sid):
-        """Abort one session via session/cancel (no process restart)."""
+        """Abort one session. NOT a process restart, so other sessions are safe.
+
+        A bare ACP `session/cancel` is not enough: a prompt that is parked
+        *waiting for permission approval* does not release on session/cancel, so
+        it would hang at the gate until ACP_TIMEOUT_SECONDS. We therefore:
+          1. deny any pending permission for this session (unblocks the
+             requestPermission callback -> the tool is denied and the prompt
+             completes instead of running unattended),
+          2. send session/cancel (covers mid-generation prompts),
+          3. drop the active-queue + accumulator entries so active_prompts is
+             accurate even while the SSE client is still connected.
+        """
         self._ensure_loop()
         if not self.alive:
             return False
+        self._deny_permissions_for(sid)
         try:
             self._run_async(self._conn.cancel(sid), timeout=10)
-            return True
         except Exception as e:
             log.warning("cancel(%s) failed: %s", sid, e)
-            return False
+        self._active_queue.pop(sid, None)
+        self._acc.pop(sid, None)
+        return True
+
+    def _deny_permissions_for(self, sid):
+        """Resolve (deny) every permission still awaiting user input for this
+        session, so a stranded prompt can't keep running after the client left."""
+        with self._perm_lock:
+            ids = [pid for pid, e in self._pending_perms.items()
+                   if e.get("sid") == sid]
+        loop = self._loop
+        for pid in ids:
+            with self._perm_lock:
+                entry = self._pending_perms.get(pid)
+            if not entry:
+                continue
+            fut = entry["future"]
+            if fut.done():
+                continue
+            if loop is not None:
+                loop.call_soon_threadsafe(fut.set_result, "deny")
+            else:
+                fut.set_result("deny")
+        if ids:
+            log.info("Abort: denied %d pending permission(s) for session %s",
+                     len(ids), sid)
 
 
 # Singleton

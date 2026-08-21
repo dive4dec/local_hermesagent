@@ -975,6 +975,13 @@
     margin: 8px 0;
     font-size: 0.85em;
 }
+.hermes-tool-label {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72em;
+    color: #8a8f98;
+    margin-bottom: 2px;
+}
 .hermes-tool-input code, .hermes-tool-result pre {
     background: #2d2d2d;
     color: #f8f8f2;

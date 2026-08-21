@@ -963,27 +963,60 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
     // the tool_call_update event arrives.
     var toolCallElements = {};
 
-    var addToolCallToChat = function(tc, bubbleEl, messageEl) {
-        // New format from bridge SSE: { title, kind, status, result_text, toolcall_id, session_update }
-        var toolcallId = tc.toolcall_id || '';
+    // Build the collapsible <details> HTML for one tool call, from a tc object
+    // { title, status, input_text, result_text, output_text }. Reused by both
+    // the live stream and history reload so they render identically.
+    var buildToolCallHtml = function(tc) {
         var title = tc.title || 'Tool call';
         var status = tc.status || '';
-        var resultText = tc.result_text || '';
-        var sessionUpdate = tc.session_update || '';
+        var inputText = tc.input_text || '';
+        var resultText = tc.result_text || tc.output_text || '';
+        var statusHtml = status === 'completed'
+            ? '<span class="text-success">completed</span>'
+            : (status ? '<span class="text-warning">' + escapeHtml(status) + '</span>'
+                       : '<span class="text-warning">executing</span>');
+        var html = '<details class="hermes-tool-call">' +
+            '<summary class="hermes-tool-summary">' +
+            '<span class="hermes-tool-icon">&#9881;</span> ' + escapeHtml(title) +
+            ' <span class="hermes-tool-status">' + statusHtml + '</span></summary>';
+        // Command / arguments (raw_input) — the primary thing the arrow reveals.
+        if (inputText) {
+            html += '<div class="hermes-tool-input"><div class="hermes-tool-label">command</div>' +
+                '<code>' + escapeHtml(inputText) + '</code></div>';
+        }
+        // Result (raw_output / content) — shown once the tool has returned.
+        if (resultText) {
+            html += '<div class="hermes-tool-result">' + formatToolResult(resultText, title) + '</div>';
+        }
+        html += '</details>';
+        return html;
+    };
 
-        // If we already have an element for this toolcall_id, update it
+    var addToolCallToChat = function(tc, bubbleEl, messageEl) {
+        // New format from bridge SSE: { title, kind, status, input_text, result_text, output_text, toolcall_id, session_update }
+        var toolcallId = tc.toolcall_id || '';
+
+        // If we already have an element for this tool_call_id, update it in place.
         if (toolcallId && toolCallElements[toolcallId]) {
             var existing = toolCallElements[toolcallId];
-            if (status) {
+            if (tc.status) {
                 existing.find('.hermes-tool-status').html(
-                    status === 'completed'
+                    tc.status === 'completed'
                         ? '<span class="text-success">completed</span>'
-                        : '<span class="text-warning">' + escapeHtml(status) + '</span>'
+                        : '<span class="text-warning">' + escapeHtml(tc.status) + '</span>'
                 );
             }
+            if (tc.input_text) {
+                existing.find('.hermes-tool-input').remove();
+                // Insert the command section right after the summary.
+                existing.find('.hermes-tool-summary').after(
+                    '<div class="hermes-tool-input"><div class="hermes-tool-label">command</div>' +
+                    '<code>' + escapeHtml(tc.input_text) + '</code></div>'
+                );
+            }
+            var resultText = tc.result_text || tc.output_text || '';
             if (resultText) {
-                var resultHtml = formatToolResult(resultText, title);
-                existing.find('.hermes-tool-result').html(resultHtml);
+                existing.find('.hermes-tool-result').html(formatToolResult(resultText, tc.title || 'Tool call'));
             }
             scrollToEnd();
             return;
@@ -991,28 +1024,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
 
         // Create new tool call element — a collapsible <details> that goes
         // INSIDE the current assistant message bubble (not a separate message).
-        var tcCounter = Object.keys(toolCallElements).length + 1;
-        var msgId = 'hermes-tool-call-' + Date.now() + '-' + tcCounter;
-        var statusHtml = status === 'completed'
-            ? '<span class="text-success">completed</span>'
-            : (status ? '<span class="text-warning">' + escapeHtml(status) + '</span>'
-                       : '<span class="text-warning">executing</span>');
-
-        var html = '<details class="hermes-tool-call" id="' + msgId + '">' +
-            '<summary class="hermes-tool-summary">' +
-            '<span class="hermes-tool-icon">&#9881;</span> ' + escapeHtml(title) +
-            ' <span class="hermes-tool-status">' + statusHtml + '</span></summary>';
-
-        if (resultText) {
-            html += '<div class="hermes-tool-result">' +
-                formatToolResult(resultText, title) + '</div>';
-        } else {
-            html += '<div class="hermes-tool-result"></div>';
-        }
-
-        html += '</details>';
-
-        var $el = $(html);
+        var $el = $(buildToolCallHtml(tc));
 
         if (bubbleEl) {
             // Insert into the current assistant bubble, before the content div
@@ -1022,7 +1034,7 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
             // Fallback: standalone message (e.g. for history reload)
             $el = $('<div class="hermes-message hermes-assistant-message">' +
                 '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
-                '<div class="hermes-bubble hermes-assistant-bubble">' + html + '</div></div>');
+                '<div class="hermes-bubble hermes-assistant-bubble">' + $el.html() + '</div></div>');
             $('#hermes-chat-area').append($el);
         }
         if (toolcallId) {
@@ -1191,8 +1203,11 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         var promises = [];
 
         messages.forEach(function(msg, i) {
-            if (!msg || !msg.content || !msg.content.trim()) return;
-            var content = msg.content.trim();
+            if (!msg) return;
+            var content = (msg.content || '').trim();
+            // Render a message if it has text OR tool calls (a pure tool-call
+            // turn may have empty content — it must not be dropped).
+            if (!content && !Array.isArray(msg.tool_calls) && !(typeof msg.tool_calls === 'string' && msg.tool_calls.trim())) return;
 
             if (msg.role === 'user') {
                 var userContentId = 'hermes-hist-user-' + i;
@@ -1220,17 +1235,27 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
                 var assistantContentId = 'hermes-hist-asst-' + i;
                 var asstActions = buildMessageActions(content, 'assistant', msg.id);
                 var asstTime = buildTimestamp(msg.timemodified);
+                // Render stored tool calls (from DB) into the bubble, after the text.
+                var toolCallsHtml = '';
+                if (msg.tool_calls) {
+                    var tcs = (typeof msg.tool_calls === 'string') ? safeJsonParse(msg.tool_calls) : msg.tool_calls;
+                    if (Array.isArray(tcs)) {
+                        tcs.forEach(function(tc) { toolCallsHtml += buildToolCallHtml(tc); });
+                    }
+                }
                 chatArea.append(
                     '<div class="hermes-message hermes-assistant-message">' +
                     '<div class="hermes-avatar hermes-assistant-avatar">H</div>' +
                     '<div class="hermes-bubble hermes-assistant-bubble">' +
                     asstTime +
                     '<div class="hermes-content" id="' + assistantContentId + '"></div>' +
+                    toolCallsHtml +
                     asstActions +
                     '</div></div>'
                 );
                 (function(cid, text) {
                     var $el = chatArea.find('#' + cid);
+                    if (!text) { $el.empty(); return; }
                     promises.push(
                         renderMarkdown(text).then(function(mdHtml) {
                             $el.html(mdHtml);
@@ -1460,6 +1485,13 @@ define(['jquery', 'core/ajax', 'filter_mathjaxloader/loader'], function($, ajax,
         var div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    };
+
+    // Parse a possibly-string JSON field (tool_calls is stored as JSON text in
+    // the DB). Returns null if it isn't valid JSON, so callers can guard.
+    var safeJsonParse = function(text) {
+        if (typeof text !== 'string') return text;
+        try { return JSON.parse(text); } catch (e) { return null; }
     };
 
     /**

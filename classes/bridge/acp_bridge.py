@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -369,6 +370,34 @@ class ACPManager:
         log.info("New ACP session %s for conversation %s", sid, moodle_conv_id)
         return sid, True
 
+    def _forget_acp_session(self, moodle_conv_id, reason):
+        """Drop a conversation's ACP session so the NEXT prompt creates a fresh
+        one. This is the recovery valve for a wedged session.
+
+        WHY: `hermes acp`'s SessionState (acp_adapter/server.py) sets
+        ``state.is_running=True`` when a turn starts and only clears it in the
+        *normal* completion path. When a prompt ends abnormally — an abort that
+        races the in-flight turn, or an ACP ``Internal error`` — the flag (or the
+        queued-prompt drain) can get stuck, so every later prompt on that session
+        hits the adapter's ``if state.is_running`` gate and returns
+        "Queued for the next turn." with nothing to drain it. The session is dead
+        from the bridge's point of view.
+
+        Dropping the moodle->acp mapping here is safe and lossless: the next
+        prompt gets a brand-new ACP session (empty ``state`` => ``is_running``
+        False), and the /session/prompt handler replays [CONVERSATION HISTORY]
+        into any new session, so context is preserved.
+        """
+        with self._boot_lock:
+            old = self._sessions.pop(moodle_conv_id, None)
+        if old:
+            self._session_locks.pop(old, None)
+            self._active_queue.pop(old, None)
+            self._acc.pop(old, None)
+        log.info("Dropped ACP session %s for conversation %s (%s) — "
+                 "next prompt will open a fresh session",
+                 old, moodle_conv_id, reason)
+
     # -- streaming update dispatch (runs on the asyncio loop) --------------
     def dispatch_update(self, session_id, update):
         from acp.schema import (AgentMessageChunk, AgentThoughtChunk,
@@ -456,7 +485,7 @@ class ACPManager:
         return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
     # -- prompt (scheduled on the loop; streams via queue) -----------------
-    async def _run_prompt(self, sid, text, q):
+    async def _run_prompt(self, sid, text, q, moodle_conv_id=None):
         from acp.schema import TextContentBlock
         lock = self._acp_lock(sid)
         async with lock:
@@ -471,21 +500,37 @@ class ACPManager:
                     q.put({"type": "done", "stop_reason": sr})
             except asyncio.CancelledError:
                 q.put({"type": "aborted", "message": "Response stopped by user"})
+                # The aborted turn may have left the ACP session in an
+                # in-flight state; drop the mapping so the next prompt is
+                # clean (history is replayed on the new session).
+                if moodle_conv_id is not None:
+                    self._forget_acp_session(moodle_conv_id, "aborted turn")
                 raise
             except Exception as e:
                 log.exception("Prompt failed for session %s", sid)
                 q.put({"type": "error", "error": str(e)})
+                # A prompt that errored (e.g. an ACP "Internal error" from an
+                # abort racing the in-flight turn) can leave the session
+                # wedged — later prompts on it would get stuck on the
+                # adapter's is_running/queue path. Drop it so the next
+                # prompt opens a fresh session; history is replayed, so this
+                # is lossless for the user.
+                if moodle_conv_id is not None:
+                    self._forget_acp_session(moodle_conv_id, f"prompt error: {e}")
 
-    def start_prompt(self, sid, text):
+    def start_prompt(self, sid, text, moodle_conv_id=None):
         """Kick off a prompt for session `sid`; return its queue.Queue.
 
         The queue is where streaming updates + the terminal done/aborted/error
-        event land. Callers read it in a generator thread."""
+        event land. Callers read it in a generator thread. `moodle_conv_id`
+        lets _run_prompt recover a wedged session (see _forget_acp_session).
+        """
         self.ensure_alive()
         q = queue.Queue()
         self._active_queue[sid] = q
         self._ensure_loop()
-        asyncio.run_coroutine_threadsafe(self._run_prompt(sid, text, q), self._loop)
+        asyncio.run_coroutine_threadsafe(
+            self._run_prompt(sid, text, q, moodle_conv_id), self._loop)
         return q
 
     def resolve_permission(self, perm_id, option_id):
@@ -511,7 +556,7 @@ class ACPManager:
             e = self._pending_perms.get(perm_id)
             return set(e["options"]) if e else set()
 
-    def cancel_session(self, sid):
+    def cancel_session(self, sid, moodle_conv_id=None):
         """Abort one session. NOT a process restart, so other sessions are safe.
 
         A bare ACP `session/cancel` is not enough: a prompt that is parked
@@ -523,6 +568,13 @@ class ACPManager:
           2. send session/cancel (covers mid-generation prompts),
           3. drop the active-queue + accumulator entries so active_prompts is
              accurate even while the SSE client is still connected.
+
+        Finally, drop the moodle->acp session mapping (when we know the conv id)
+        so the NEXT prompt opens a brand-new ACP session. Cancelling an in-flight
+        turn can leave the adapter's SessionState (is_running / queued drain) in
+        a state where the session no longer accepts prompts; dropping the mapping
+        guarantees the user's next message gets a clean session. History is
+        replayed on new sessions, so context is preserved.
         """
         self._ensure_loop()
         if not self.alive:
@@ -534,6 +586,8 @@ class ACPManager:
             log.warning("cancel(%s) failed: %s", sid, e)
         self._active_queue.pop(sid, None)
         self._acc.pop(sid, None)
+        if moodle_conv_id is not None:
+            self._forget_acp_session(moodle_conv_id, "abort")
         return True
 
     def _deny_permissions_for(self, sid):
@@ -637,10 +691,14 @@ async def session_prompt(request: Request):
     else:
         full = prompt_text
 
-    q = acp.start_prompt(sid, full)
+    q = acp.start_prompt(sid, full, moodle_conv_id=conversationid)
 
     def event_generator():
         last_keep = time.monotonic()
+        got_terminal = False
+        msg_events = 0
+        msg_text = ""
+        tool_events = 0
         try:
             while True:
                 try:
@@ -652,12 +710,15 @@ async def session_prompt(request: Request):
                     continue
                 ev_type = ev.get("type")
                 if ev_type == "message":
+                    msg_events += 1
+                    msg_text += ev.get("delta", "")
                     yield sse_data({"delta": ev.get("delta", ""), "full": ev.get("full", ""),
                                     "type": "message", "session_id": sid})
                 elif ev_type == "reasoning":
                     yield sse_data({"delta": ev.get("delta", ""), "full": ev.get("full", ""),
                                     "type": "reasoning", "session_id": sid})
                 elif ev_type == "tool_call":
+                    tool_events += 1
                     yield sse_named("tool_call", {"type": "tool_call",
                                                   "tool_call": ev.get("tool_call", {}),
                                                   "session_id": sid})
@@ -672,19 +733,42 @@ async def session_prompt(request: Request):
                         "session_id": sid,
                     })
                 elif ev_type == "done":
+                    got_terminal = True
                     yield sse_named("done", {"type": "done", "session_id": sid})
                     return
                 elif ev_type == "aborted":
+                    got_terminal = True
                     yield sse_named("aborted", {"type": "aborted",
                                                 "message": ev.get("message", "Response stopped by user")})
                     return
                 elif ev_type == "error":
+                    got_terminal = True
                     yield sse_named("error", {"type": "error", "error": ev.get("error", "Unknown error")})
                     return
         except Exception as e:
             log.error("Event generator error: %s", e, exc_info=True)
             yield sse_data({"type": "error", "error": str(e)})
         finally:
+            # Self-heal: if the agent did NOTHING but answer with a single
+            # "Queued for the next turn." acknowledgement (no real message,
+            # no tool calls), the ACP session is wedged — the adapter thinks a
+            # prior (aborted/errored) turn is still running and is swallowing
+            # every prompt into its queue. That state never clears on its own,
+            # so drop the session: the user's NEXT message opens a fresh ACP
+            # session and [CONVERSATION HISTORY] is replayed, so context is
+            # preserved. This recovers conversations that wedged before this
+            # fix landed (e.g. conversation 304).
+            stripped = msg_text.strip()
+            if (got_terminal and tool_events == 0
+                    and re.search(r"Queued for the next turn", stripped)
+                    and (stripped.lower().startswith("queued for the next turn")
+                         or "no active turn" in stripped.lower())):
+                log.warning("Prompt returned a queue-only ack on conversation "
+                            "%s (session %s) — session is wedged, dropping it "
+                            "so the next prompt opens a fresh session.",
+                            conversationid, sid)
+                acp._forget_acp_session(conversationid,
+                                        "queue-only response (wedged session)")
             acp._active_queue.pop(sid, None)
             acp._acc.pop(sid, None)
 
@@ -742,7 +826,7 @@ async def session_abort(request: Request):
         sid = acp._sessions.get(conversationid)
     if not sid:
         return {"status": "ok", "aborted": False, "message": "No active stream for this conversation"}
-    ok = acp.cancel_session(sid)
+    ok = acp.cancel_session(sid, moodle_conv_id=conversationid)
     log.info("Abort session %s (conversation %s) -> %s", sid, conversationid, ok)
     return {"status": "ok", "aborted": True}
 

@@ -26,6 +26,30 @@
     hermes-agent is 0.19.0 — **0.20.x is not on PyPI** as of this date.
 
 ### Fixed
+- **Chat conversations permanently wedged after Stop/abort** ("Queued for the next
+  turn." on every retry). Root cause: `hermes acp`'s `SessionState.is_running`
+  flag was only cleared in the *normal* completion path. An abort that raced the
+  in-flight turn (or an ACP `Internal error`) left the adapter's session
+  `is_running=True` with a pending queued-prompt drain that would never fire —
+  so every subsequent prompt on that conversation hit the adapter's
+  `if state.is_running` gate and returned "Queued for the next turn." forever.
+
+  Fix in `acp_bridge.py` (our file, not the vendored adapter):
+  - New `ACPManager._forget_acp_session(conv_id, reason)` drops the
+    moodle→acp session mapping + per-session state. The next prompt opens a
+    brand-new ACP session; `[CONVERSATION HISTORY]` is replayed, so context is
+    preserved.
+  - `cancel_session()` now calls `_forget_acp_session` on abort (proactive).
+  - `_run_prompt()` calls `_forget_acp_session` on both `CancelledError` and
+    generic `Exception` (covers the `Internal error` race).
+  - The SSE `event_generator` **self-heals** after the fact: if the prompt
+    produced only a "Queued for the next turn." ack (no real message, no tool
+    calls), the session is dropped. This recovers conversations that wedged
+    *before* the fix landed (e.g. conversation 304) on the very next message.
+
+  Verified on edb: abort a long prompt mid-generation → retry "hi" on the same
+  conversation → gets a real answer (not "Queued"), bridge stays healthy,
+  single `hermes acp` process, no duplicate sessions.
 - **`Update & Bootstrap` returned 504 Gateway Time-out.** The backgrounded job
   (snapshot → bootstrap → restart, ~10 min) was launched with `sh … &` while
   still inheriting the PHP-FPM request's stdout/stderr pipe, so PHP's

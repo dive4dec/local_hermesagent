@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.5.13] — 2026-08-22
+
+### Added
+- **One-click Hermes upgrade with automatic rollback (venv backups).**
+  New `scripts/hermes-venv.sh` (snapshot / restore / list) plus a
+  "Backups & Rollback" panel on the admin settings page:
+  - **`Update & Bootstrap`** now first takes a venv snapshot (a rollback
+    point named `venv-<version>_<ts>.tar.gz`, ~78 MB, ~60 s), then upgrades
+    `hermes-agent`, then **restarts the bridge** so the new code actually
+    loads — the whole thing is one backgrounded op you can watch complete.
+  - **`Snapshot venv`** button for a manual rollback point at any time.
+  - The panel lists every snapshot (version · size · created) with a
+    **Restore** button; the newest is badged. The running
+    snapshot/update/restore op shows live "in progress" status.
+  - `restore` swaps the venv via a temp dir + `mv` (NFS-safe — no
+    `rm -rf`-then-tar half-writes), waits on the bridge health endpoint for
+    the old process to release its file handles before moving the tree,
+    re-applies `patch_acp_timeout.py` + the bridge, re-verifies `hermes
+    --version`, and restarts the bridge. Beyond the newest 3 snapshots are
+    pruned automatically.
+  - Verified end-to-end on edb: snapshot 0.18.2 → upgrade to latest
+    (0.19.0) with bridge restart → **revert to 0.18.2** (old bridge killed,
+    fresh one serving, zero `.nfs*` debris). Note: the index's latest
+    hermes-agent is 0.19.0 — **0.20.x is not on PyPI** as of this date.
+
+### Fixed
+- **`sync.sh` stripped the executable bit from `.sh` scripts.** It ran a
+  blanket `find … -exec chmod 0644` over every synced file, so control
+  scripts (already `100755` in git) arrived as `644`. Anything guarding on
+  `[ -x ]` silently skipped — including the hermes-venv restore's
+  stop/start-bridge step, which left the *old* bridge running after a
+  rollback. Now non-exec files are set `0644` and executable ones `0755`
+  (tar carries the exec bit from source). Defense in depth: `hermes-venv.sh`
+  guards on `[ -f "$BRIDGE_CONTROL" ]` and invokes it via `sh`, so it no
+  longer depends on the exec bit at all.
+
 ## [0.5.12] — 2026-08-21
 
 ### Added

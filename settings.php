@@ -4,6 +4,101 @@ defined('MOODLE_INTERNAL') || die();
 require_once($CFG->dirroot . '/local/hermesagent/lib.php');
 require_once($CFG->dirroot . '/local/hermesagent/classes/admin/setting_configfile.php');
 
+/**
+ * Render the "Backups & Rollback" panel for the admin settings page.
+ *
+ * Lists the venv snapshots in $hermes_home/backups (newest first) with a
+ * Restore button on each, plus a live status line if a snapshot/update/restore
+ * is currently running in the background.
+ *
+ * @param string $hermes_home  Absolute path to the portable hermes home.
+ * @param string $wwwroot      Moodle wwwroot (for action URLs).
+ * @return string  HTML fragment (a <div> with a table).
+ */
+if (!function_exists('hermes_backups_panel')) {
+function hermes_backups_panel(string $hermes_home, string $wwwroot): string {
+    $backup_dir = $hermes_home . '/backups';
+    $act_base   = $wwwroot . '/local/hermesagent/settings_action.php';
+
+    // Liveness: any of the three backgrounded venv ops in progress?
+    $running = [];
+    foreach (['bootstrap.pid' => 'update', '.venv_snapshot.log.pid' => 'snapshot', '.venv_restore.log.pid' => 'restore'] as $pf => $label) {
+        $path = $hermes_home . '/' . $pf;
+        if (is_file($path)) {
+            $pid = intval(trim((string)@file_get_contents($path)));
+            if ($pid > 0 && @posix_kill($pid, 0)) {
+                $running[] = $label;
+            } else {
+                @unlink($path); // stale
+            }
+        }
+    }
+
+    // Current version.
+    $cur = '';
+    if (is_file($hermes_home . '/venv/bin/hermes')) {
+        $out = [];
+        @exec(escapeshellarg($hermes_home . '/venv/bin/hermes') . ' --version 2>&1', $out, $rc);
+        $cur = trim((string)array_shift($out)); // first line only, e.g. "Hermes Agent v0.18.2 (...)"
+    }
+
+    $html = '<div class="hermes-backups" style="margin-top:16px;">';
+    $html .= '<h4 style="margin-bottom:6px;"><i class="icon fa fa-history"></i> Backups &amp; Rollback</h4>';
+
+    if (!empty($running)) {
+        $html .= '<div class="alert alert-warning" style="padding:6px 10px;font-size:13px;">'
+            . '<i class="icon fa fa-spinner fa-spin"></i> '
+            . htmlspecialchars(implode(', ', $running)) . ' in progress — refresh the page when it completes.</div>';
+    }
+
+    $html .= '<table class="generaltable">';
+    $html .= '<tr><th>Snapshot</th><th>Size</th><th>Created</th><th style="width:90px;"></th></tr>';
+
+    $files = [];
+    if (is_dir($backup_dir)) {
+        $scand = @scandir($backup_dir);
+        foreach ($scand as $f) {
+            if (preg_match('/^venv-.*\.tar\.gz$/', $f)) {
+                $files[$f] = $backup_dir . '/' . $f;
+            }
+        }
+    }
+    // Newest first.
+    uasort($files, fn($a, $b) => filemtime($b) <=> filemtime($a));
+
+    if (empty($files)) {
+        $html .= '<tr><td colspan="4" class="dimmed_text" style="padding:8px;">No snapshots yet. Click <em>Update &amp; Bootstrap</em> (auto-snapshots first) or <em>Snapshot venv</em> to create a rollback point.</td></tr>';
+    } else {
+        foreach ($files as $name => $path) {
+            $size = round(filesize($path) / 1048576, 1) . ' MB';
+            $mtime = date('Y-m-d H:i', filemtime($path));
+            // Extract version from filename: venv-0.18.2_20260822_035914.tar.gz
+            preg_match('/^venv-(\d+\.\d+\.\d+)/', $name, $vm);
+            $vlabel = $vm[1] ?? '?';
+            $is_latest = ($name === key($files));
+            $rowcls = $is_latest ? ' style="background:#f0f7ff;"' : '';
+            $confirm = 'confirm(\'Roll the Hermes venv back to ' . htmlspecialchars($vlabel) . '? The bridge will briefly stop and restart.\')';
+            $html .= '<tr' . $rowcls . '>';
+            $html .= '<td>' . htmlspecialchars($vlabel)
+                  . ($is_latest ? ' <span class="badge" style="background:#4f46e5;">latest</span>' : '')
+                  . '<br><code style="font-size:11px;color:#666;">' . htmlspecialchars($name) . '</code></td>';
+            $html .= '<td>' . $size . '</td>';
+            $html .= '<td>' . $mtime . '</td>';
+            $html .= '<td><a href="' . $act_base . '?action=restore&snapshot=' . urlencode($name) . '&sesskey=' . sesskey() . '"'
+                  . ' onclick="' . $confirm . '" class="btn btn-sm btn-danger"><i class="icon fa fa-undo"></i> Restore</a></td>';
+            $html .= '</tr>';
+        }
+    }
+    $html .= '</table>';
+    if ($cur !== '') {
+        $html .= '<div style="font-size:12px;color:#666;margin-top:6px;">Current venv: ' . htmlspecialchars($cur)
+              . ' &nbsp;·&nbsp; Old snapshots beyond the newest 3 are pruned automatically.</div>';
+    }
+    $html .= '</div>';
+    return $html;
+}
+} // end function_exists guard
+
 if ($hassiteconfig) {
     $settings = new admin_settingpage('local_hermesagent_settings', get_string('pluginname', 'local_hermesagent'));
 
@@ -78,7 +173,9 @@ if ($hassiteconfig) {
     $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/dashboard.php/" target="_blank" class="btn btn-info"><i class="icon fa fa-tachometer"></i> Dashboard</a></td>';
     $links_html .= '<td>Full Hermes web UI — configure model/provider, browse sessions, manage MCP servers and toolsets, and set up messaging platforms. Opens in a new tab.</td></tr>';
     $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/settings_action.php?action=update&sesskey=' . sesskey() . '" class="btn btn-warning"><i class="icon fa fa-download"></i> Update &amp; Bootstrap</a></td>';
-    $links_html .= '<td>Install or update the Hermes Python environment, bridge scripts, and MCP servers. Safe to run repeatedly (idempotent). Also repairs the installation if something is broken.</td></tr>';
+    $links_html .= '<td>Install or update the Hermes Python environment, bridge scripts, and MCP servers. Safe to run repeatedly (idempotent). Also repairs the installation if something is broken. <strong>Automatically snapshots the current venv first</strong> so you can roll back.</td></tr>';
+    $links_html .= '<tr><td><a href="' . $CFG->wwwroot . '/local/hermesagent/settings_action.php?action=snapshot&sesskey=' . sesskey() . '" class="btn btn-secondary"><i class="icon fa fa-floppy-o"></i> Snapshot venv</a></td>';
+    $links_html .= '<td>Take a rollback snapshot of the current Hermes venv only (no upgrade). Useful before any manual change to <code>config.yaml</code>/<code>.env</code> that you might want to undo along with the packages.</td></tr>';
 
     // Bootstrap status row
     $bootstrap_log = "$hermes_home/bootstrap_update.log";
@@ -144,6 +241,11 @@ if ($hassiteconfig) {
     $links_html .= '</table>';
     $links_html .= '</div>';
     $settings->add(new admin_setting_heading('hermesagent_links', get_string('tools', 'local_hermesagent'), $links_html));
+
+    // --- Backups & Rollback (venv snapshots with one-click restore) ---
+    $settings->add(new admin_setting_heading('hermesagent_backups',
+        get_string('tools', 'local_hermesagent') . ' — Backups & Rollback',
+        hermes_backups_panel($hermes_home, $CFG->wwwroot)));
 
     // ================================================================
     // Section 2: ACP Bridge

@@ -281,6 +281,15 @@ if [ -f "$PLUGIN_DIR/scripts/patch_acp_timeout.py" ]; then
         echo "  WARNING: ACP timeout patch failed (non-fatal)"
 fi
 
+# Patch hermes MCP client for the mcp SDK 1.x -> 2.0.0 rename
+# (CallToolResult.isError -> is_error). Without this, every MCP tool call
+# (e.g. moodle_db) raises AttributeError on mcp 2.0.0. Version-tolerant and
+# idempotent — safe on both SDK versions.
+if [ -f "$PLUGIN_DIR/scripts/patch_mcp_iserror.py" ]; then
+    "$HERMES_HOME/venv/bin/python" "$PLUGIN_DIR/scripts/patch_mcp_iserror.py" 2>&1 || \
+        echo "  WARNING: MCP client isError patch failed (non-fatal)"
+fi
+
 # ACP SDK integrity check — the bridge depends on the `acp` package's public
 # API (connect_to_agent + the Client/ClientSideConnection methods). We do NOT
 # pin a version: instead we verify the API surface the bridge actually needs and

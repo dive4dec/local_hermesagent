@@ -26,6 +26,33 @@
     hermes-agent is 0.19.0 — **0.20.x is not on PyPI** as of this date.
 
 ### Fixed
+- **`moodle_db` MCP tool crash-looped after the venv rebuilt with `mcp` 2.0.0.**
+  Bootstrap installs `mcp` unpinned, so the hermes-agent upgrade pulled the 2.0.0
+  SDK — a full rewrite that broke the MCP stack on **both** ends:
+  - *Server (ours):* `scripts/moodle_db_mcp.py` used the 1.x `Server` +
+    `@app.list_tools()` / `@app.call_tool()` API, which 2.0.0 removed
+    (`AttributeError: 'Server' object has no attribute 'list_tools'`), so the
+    server was killed and restarted every few seconds.
+  - *Client (hermes):* `tools/mcp_tool.py` read `result.isError`, but 2.0.0
+    renamed it to `is_error`, so **every** tool call raised
+    `AttributeError: 'CallToolResult' object has no attribute 'isError'` and the
+    agent silently fell back to raw `php -r` terminal commands.
+
+  Fix (tracks the newer SDK, matches how hermes 0.19.0 is built):
+  - Ported `moodle_db_mcp.py` to the 2.0.0 API: `mcp.server.MCPServer` +
+    per-tool `@app.tool(name=..., description=...)` decorators (type-annotated
+    params become the JSON input schema) + `run_stdio_async()`. All four tools
+    (`query`, `list_tables`, `describe_table`, `schema_hints`) preserved, same
+    safety (SELECT-only, auto-LIMIT 100, sensitive-column redaction).
+  - New `scripts/patch_mcp_iserror.py` (idempotent, non-fatal) makes hermes's
+    client read the error flag version-tolerantly (`is_error` w/ `isError`
+    fallback). `bootstrap.sh` runs it right after the existing ACP-timeout patch,
+    so it is re-applied on **every** build — the venv patch is durable.
+
+  Verified on edb: `moodle_db` stable (2.5 min uptime, 0 crash-loop growth);
+  agent called `mcp__moodle_db__query` end-to-end and returned the real result
+  (`SELECT COUNT(*) FROM mdl_course` → 4) with no `php -r` fallback.
+
 - **Chat conversations permanently wedged after Stop/abort** ("Queued for the next
   turn." on every retry). Root cause: `hermes acp`'s `SessionState.is_running`
   flag was only cleared in the *normal* completion path. An abort that raced the

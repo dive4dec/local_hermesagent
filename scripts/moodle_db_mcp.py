@@ -4,6 +4,12 @@
 DB credentials are read from Moodle's config.php at runtime — never hardcoded.
 This makes the script work on any deployment (edb, cs1302eq-26a, etc.)
 without per-instance configuration.
+
+Ported to the `mcp` Python SDK 2.0.0 API (mcp.server.MCPServer). The legacy
+1.x `Server` + `@list_tools()` / `@call_tool()` decorators were removed in
+2.0.0; each tool is now a plain (async) function registered with
+`@app.tool(name=..., description=...)` whose type-annotated parameters
+become the JSON input schema. Served over stdio via `run_stdio_async()`.
 """
 
 import json
@@ -43,6 +49,15 @@ def run_php(php_code):
     full_code = PHP_HEADER + php_code
     r = subprocess.run(['php', '-r', full_code], capture_output=True, text=True, timeout=30)
     return r.stdout, r.stderr, r.returncode
+
+def _php_result_to_text(stdout, stderr, rc):
+    """Normalise a run_php() outcome into a JSON/text string for a tool response."""
+    if rc != 0:
+        err_msg = stderr.strip()[:200] if stderr.strip() else stdout.strip()[:200]
+        if not err_msg:
+            err_msg = f'PHP exited with code {rc} (no output)'
+        return json.dumps({'error': err_msg})
+    return stdout.strip()
 
 def run_query(sql):
     check = safe_query(sql)
@@ -96,114 +111,70 @@ SCHEMA_HINTS = {
 }
 
 if __name__ == '__main__':
-    from mcp.server import Server
     import asyncio
+    from mcp.server import MCPServer
 
-    app = Server('moodle-db')
+    app = MCPServer('moodle-db')
 
-    @app.list_tools()
-    async def list_tools():
-        from mcp.types import Tool
-        return [
-            Tool(
-                name='query',
-                description='Run a safe read-only SQL query against the Moodle database. '
-                           'Only SELECT, SHOW, DESCRIBE allowed. Results limited to 100 rows. '
-                           'Sensitive columns redacted. '
-                           'Key tables: mdl_course, mdl_user, mdl_user_enrolments, mdl_enrol, '
-                           'mdl_role, mdl_role_assignments, mdl_course_modules, mdl_grade_grades, '
-                           'mdl_groups, mdl_groups_members, mdl_config, mdl_local_hermesagent_*. '
-                           'Example: SELECT COUNT(*) FROM mdl_course',
-                inputSchema={
-                    'type': 'object',
-                    'properties': {
-                        'query': {
-                            'type': 'string',
-                            'description': 'SQL query (SELECT only). Example: SELECT id, fullname, shortname FROM mdl_course WHERE shortname = "CS1302"'
-                        }
-                    },
-                    'required': ['query']
-                }
-            ),
-            Tool(
-                name='list_tables',
-                description='List all Moodle tables with row counts and sizes',
-                inputSchema={'type': 'object', 'properties': {}, 'required': []}
-            ),
-            Tool(
-                name='describe_table',
-                description='Show the structure (columns, types) of a specific table',
-                inputSchema={
-                    'type': 'object',
-                    'properties': {
-                        'table': {
-                            'type': 'string',
-                            'description': 'Table name (e.g. mdl_course)'
-                        }
-                    },
-                    'required': ['table']
-                }
-            ),
-            Tool(
-                name='schema_hints',
-                description='Show key table descriptions to help construct queries. '
-                           'Useful when you need to know what tables exist and what they contain.',
-                inputSchema={'type': 'object', 'properties': {}, 'required': []}
-            )
-        ]
+    @app.tool(
+        name='query',
+        description='Run a safe read-only SQL query against the Moodle database. '
+                    'Only SELECT, SHOW, DESCRIBE allowed. Results limited to 100 rows. '
+                    'Sensitive columns redacted. '
+                    'Key tables: mdl_course, mdl_user, mdl_user_enrolments, mdl_enrol, '
+                    'mdl_role, mdl_role_assignments, mdl_course_modules, mdl_grade_grades, '
+                    'mdl_groups, mdl_groups_members, mdl_config, mdl_local_hermesagent_*. '
+                    'Example: SELECT COUNT(*) FROM mdl_course',
+    )
+    async def query(query: str) -> str:
+        """SQL query (SELECT only). Example: SELECT id, fullname, shortname FROM mdl_course WHERE shortname = "CS1302" """
+        result = run_query(query)
+        return json.dumps(result, indent=2)
 
-    @app.call_tool()
-    async def call_tool(name, arguments):
-        # Hermes ACP prefixes tool names with 'mcp_<server>_'
-        # Strip the prefix if present
-        if name.startswith('mcp_moodle_db_'):
-            name = name[len('mcp_moodle_db_'):]
+    @app.tool(
+        name='list_tables',
+        description='List all Moodle tables with row counts and sizes',
+    )
+    async def list_tables() -> str:
+        stdout, stderr, rc = run_php("""
+        $link = new mysqli($CFG->dbhost, $CFG->dbuser, $CFG->dbpass, $CFG->dbname);
+        if ($link->connect_error) { echo json_encode(['error' => 'DB connect failed: ' . $link->connect_error]); exit(1); }
+        $r = $link->query("SELECT TABLE_NAME, TABLE_ROWS, ROUND(DATA_LENGTH/1024/1024,1) as size_mb FROM information_schema.TABLES WHERE TABLE_SCHEMA='" . $CFG->dbname . "' ORDER BY TABLE_NAME");
+        if (!$r) { echo json_encode(['error' => $link->error]); exit(1); }
+        $rows = [];
+        while ($row = $r->fetch_assoc()) $rows[] = $row;
+        echo json_encode($rows, JSON_PRETTY_PRINT);
+        $link->close();
+        """)
+        return _php_result_to_text(stdout, stderr, rc)
 
-        if name == 'query':
-            result = run_query(arguments['query'])
-            return [{'type': 'text', 'text': json.dumps(result, indent=2)}]
+    @app.tool(
+        name='describe_table',
+        description='Show the structure (columns, types) of a specific table',
+    )
+    async def describe_table(table: str) -> str:
+        """Table name (e.g. mdl_course) """
+        table = table.strip()
+        if not table.replace('_', '').isalnum():
+            return json.dumps({'error': 'Invalid table name'})
+        stdout, stderr, rc = run_php(f"""
+        $link = new mysqli($CFG->dbhost, $CFG->dbuser, $CFG->dbpass, $CFG->dbname);
+        if ($link->connect_error) {{ echo json_encode(['error' => 'DB connect failed: ' . $link->connect_error]); exit(1); }}
+        $r = $link->query("SHOW COLUMNS FROM `{table}`");
+        if (!$r) {{ echo json_encode(['error' => $link->error]); exit(1); }}
+        $cols = [];
+        while ($row = $r->fetch_assoc()) $cols[] = $row;
+        echo json_encode($cols, JSON_PRETTY_PRINT);
+        $link->close();
+        """)
+        return _php_result_to_text(stdout, stderr, rc)
 
-        elif name == 'list_tables':
-            stdout, stderr, rc = run_php(f"""
-            $link = new mysqli($CFG->dbhost, $CFG->dbuser, $CFG->dbpass, $CFG->dbname);
-            if ($link->connect_error) {{ echo json_encode(['error' => 'DB connect failed: ' . $link->connect_error]); exit(1); }}
-            $r = $link->query("SELECT TABLE_NAME, TABLE_ROWS, ROUND(DATA_LENGTH/1024/1024,1) as size_mb FROM information_schema.TABLES WHERE TABLE_SCHEMA='" . $CFG->dbname . "' ORDER BY TABLE_NAME");
-            if (!$r) {{ echo json_encode(['error' => $link->error]); exit(1); }}
-            $rows = [];
-            while ($row = $r->fetch_assoc()) $rows[] = $row;
-            echo json_encode($rows, JSON_PRETTY_PRINT);
-            $link->close();
-            """)
-            if rc != 0:
-                return [{'type': 'text', 'text': json.dumps({'error': stderr.strip()[:200] or stdout.strip()[:200] or f'PHP exit {rc}'})}]
-            return [{'type': 'text', 'text': stdout.strip()}]
+    @app.tool(
+        name='schema_hints',
+        description='Show key table descriptions to help construct queries. '
+                    'Useful when you need to know what tables exist and what they contain.',
+    )
+    async def schema_hints() -> str:
+        return json.dumps(SCHEMA_HINTS, indent=2)
 
-        elif name == 'describe_table':
-            table = arguments['table'].strip()
-            if not table.replace('_', '').isalnum():
-                return [{'type': 'text', 'text': 'Invalid table name'}]
-            stdout, stderr, rc = run_php(f"""
-            $link = new mysqli($CFG->dbhost, $CFG->dbuser, $CFG->dbpass, $CFG->dbname);
-            if ($link->connect_error) {{ echo json_encode(['error' => 'DB connect failed: ' . $link->connect_error]); exit(1); }}
-            $r = $link->query("SHOW COLUMNS FROM `{table}`");
-            if (!$r) {{ echo json_encode(['error' => $link->error]); exit(1); }}
-            $cols = [];
-            while ($row = $r->fetch_assoc()) $cols[] = $row;
-            echo json_encode($cols, JSON_PRETTY_PRINT);
-            $link->close();
-            """)
-            if rc != 0:
-                return [{'type': 'text', 'text': json.dumps({'error': stderr.strip()[:200] or stdout.strip()[:200] or f'PHP exit {rc}'})}]
-            return [{'type': 'text', 'text': stdout.strip()}]
-
-        elif name == 'schema_hints':
-            return [{'type': 'text', 'text': json.dumps(SCHEMA_HINTS, indent=2)}]
-
-        return [{'type': 'text', 'text': f'Unknown tool: {name}'}]
-
-    async def main():
-        from mcp.server.stdio import stdio_server
-        async with stdio_server() as (read, write):
-            await app.run(read, write, app.create_initialization_options())
-
-    asyncio.run(main())
+    asyncio.run(app.run_stdio_async())

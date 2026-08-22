@@ -70,9 +70,17 @@ switch ($action) {
             mkdir($hermes_home, 0777, true);
         }
         $bootstrap_script = escapeshellarg(__DIR__ . '/scripts/bootstrap.sh');
-        $log_file = escapeshellarg($hermes_home . '/bootstrap_update.log');
+        $log_file = $hermes_home . '/bootstrap_update.log';
+        $pid_file = $hermes_home . '/bootstrap.pid';
         $env = 'HERMES_HOME=' . escapeshellarg($hermes_home);
-        $cmd = $env . ' sh ' . $bootstrap_script . ' > ' . $log_file . ' 2>&1 &';
+        // Run in a backgrounded SUBSHELL: execute bootstrap, then remove the
+        // pidfile. The subshell PID (captured by $! after &) stays alive for
+        // the whole run, so it's a reliable liveness marker. settings.php checks
+        // posix_kill(pid,0) against this instead of `ps | grep` (which is racy —
+        // the log is truncated at the start of each run, so a stale "complete"
+        // marker + grep timing could misreport status).
+        $cmd = '( ' . $env . ' sh ' . $bootstrap_script . ' > ' . escapeshellarg($log_file)
+            . ' 2>&1; rm -f ' . escapeshellarg($pid_file) . ' ) & echo $! > ' . escapeshellarg($pid_file);
         exec($cmd);
         $message = 'Update started in background. Check the bridge status below or see '
             . $hermes_home . '/bootstrap_update.log for details.';

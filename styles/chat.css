@@ -1016,3 +1016,47 @@
 .hermes-system-content {
     flex: 1;
 }
+
+/* ============================================================================
+   Q2 FIX (2026-08-21) — tool-call expand arrow never flipped to ▾.
+   The block appended earlier in this file targeted `.hermes-tool-details`,
+   but the JS builds <details class="hermes-tool-call">, so the [open] rotate
+   rule never matched. The corrected selectors live BELOW (appended last so
+   they win by cascade) — the stale `.hermes-tool-details[open]` rule above is
+   inert and left in place to avoid churning the hand-maintained file.
+   ========================================================================== */
+.hermes-tool-call > .hermes-tool-summary::before {
+    content: "\25B6";
+    display: inline-block;
+    margin-right: 4px;
+    transition: transform 0.15s ease;
+}
+.hermes-tool-call[open] > .hermes-tool-summary::before {
+    transform: rotate(90deg);
+}
+
+/* ============================================================================
+   Q6 FIX (2026-08-21) — hyperlink contrast.
+   Moodle's default link blue is low-contrast against the indigo user bubble
+   (#4f46e5) and the light-grey inline-code bg, making links nearly invisible.
+   Force explicit per-context colors; the user bubble is the "no enough
+   contrast" case.
+   ========================================================================== */
+.hermes-user-bubble .hermes-content a {
+    color: #ffffff;
+    text-decoration: underline;
+    font-weight: 600;
+}
+.hermes-user-bubble .hermes-content a:hover {
+    color: #e0e7ff;
+}
+.hermes-assistant-bubble .hermes-content a {
+    color: #4f46e5;
+    text-decoration: underline;
+}
+.hermes-assistant-bubble .hermes-content a:hover {
+    color: #6366f1;
+}
+.hermes-content a code {
+    color: #818cf8;
+}

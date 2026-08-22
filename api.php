@@ -391,7 +391,11 @@ function api_stream_response(): void {
                         $tool_calls[$tc['toolcall_id']] = $tc;
                         // Persist now (not just at done) so a reload / switch /
                         // crash mid-turn still shows the tool calls.
-                        _hermesagent_persist_assistant($DB, $conversationid,
+                        // Capture the return value: the FIRST call inserts a new
+                        // row and returns its id; without this every tool_call
+                        // would insert a *separate* row (the "tool call spans
+                        // multiple chat boxes" bug).
+                        $message_id = _hermesagent_persist_assistant($DB, $conversationid,
                             $assistant_content, $reasoning_content, $tool_calls,
                             $message_id, $req_id);
                     }
@@ -411,7 +415,7 @@ function api_stream_response(): void {
                     if (trim($assistant_content) === '' && !empty($reasoning_content)) {
                         $assistant_content = $reasoning_content;
                     }
-                    _hermesagent_persist_assistant($DB, $conversationid,
+                    $message_id = _hermesagent_persist_assistant($DB, $conversationid,
                         $assistant_content, $reasoning_content, $tool_calls,
                         $message_id, $req_id);
                     // Stop pulling from the bridge.

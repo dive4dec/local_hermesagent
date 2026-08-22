@@ -1,5 +1,14 @@
 /**
  * Hermes Agent chat styles
+ *
+ * ⚠️  STALE SOURCE — DO NOT COMPILE FROM THIS FILE.
+ * The compiled `chat.css` is hand-maintained and is ahead of this SCSS by a
+ * large margin (permission UI, sidebar, message actions, system messages,
+ * search, bulk mode — ~45 classes exist in chat.css but NOT here). Running
+ * `sass chat.scss chat.css` will SILENTLY DROP all of them and break the UI.
+ * Make visual changes directly in `chat.css` (append at the end, as the
+ * Q2/Q6 fixes dated 2026-08-21 do). To use this file again, first reconcile
+ * it with chat.css.
  */
 
 $hermes-primary: #4f46e5;

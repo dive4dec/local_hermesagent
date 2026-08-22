@@ -127,20 +127,26 @@ function local_hermesagent_ensure_bridge_running(int $bridge_port): bool {
     exec($cmd, $output, $ret);
     error_log('HERMES [AUTO-START]: launching bridge via control script: ' . implode(' ', $output));
 
-    // Give it a brief moment, then check (don't block for 3s)
-    sleep(1);
-    $ch = curl_init("http://127.0.0.1:$bridge_port/health");
-    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 2]);
-    $resp = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    if ($http_code === 200) {
-        error_log('HERMES [AUTO-START]: bridge healthy after 1s');
-        return true;
-    }
+    // Poll until healthy (up to 30s). A cold bridge start takes 5-15s on a
+    // 4-GPU pod (venv + hermes + acp child spawn); the old "sleep(1) then
+    // return false" raced the boot and produced the "Connection error —
+    // check console" that self-healed on the next attempt.
+    $deadline = time() + 30;
+    do {
+        sleep(1);
+        $ch = curl_init("http://127.0.0.1:$bridge_port/health");
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 2]);
+        curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($http_code === 200) {
+            error_log('HERMES [AUTO-START]: bridge healthy after ' . ($deadline - time() + 1) . 's');
+            return true;
+        }
+    } while (time() < $deadline);
 
-    // Bridge is still booting — don't block, let user retry
-    error_log('HERMES [AUTO-START]: bridge still booting, user should retry in ~5s');
+    // Still not healthy after 30s — genuine failure, let the user retry.
+    error_log('HERMES [AUTO-START]: bridge not healthy after 30s poll');
     return false;
 }
 

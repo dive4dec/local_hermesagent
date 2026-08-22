@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.5.12] — 2026-08-21
+
+### Added
+- **`admin/cli/cleanup_duplicate_toolcalls.php`** — one-off CLI to collapse the
+  duplicated assistant rows left behind by the pre-v0.5.12 stream-persistence
+  bug. Collapses any run of ≥2 consecutive assistant rows per conversation to
+  the single most-complete row (max tool calls, then longest content, then
+  latest). `--dry-run` previews; deletions are backed up to
+  `$CFG->tempdir/hermesagent_msg_cleanup_<ts>.json`; idempotent. Verified on
+  edb: 44 runs / 69 rows collapsed (538 → 469 rows), re-run reports 0.
+
+### Fixed
+- **Tool calls spanning multiple chat bubbles (Q5).** `api.php` was discarding
+  the return value of `_hermesagent_persist_assistant()` on every
+  `tool_call` event, so the first tool call INSERTed a new row and subsequent
+  tool calls INSERTed further rows (the static `$message_id` was never
+  assigned). On reload, each DB row became its own assistant bubble, so a
+  single turn with N tool calls rendered as N+1 bubbles. Now the return value
+  is captured on the `tool_call`, `abort`, and `done` paths so all events in
+  one turn upsert the same row.
+- **Tool-call expand arrow never flipped to ▾ (Q2).** The CSS block for
+  `.hermes-tool-summary` targeted `.hermes-tool-details[open]`, but the JS
+  builds `<details class="hermes-tool-call">` — so the rotation rule never
+  matched. Corrected selectors appended to `chat.css` (the SCSS source is
+  stale; see the warning added at the top of `chat.scss`).
+- **Connection error after stopping the bridge (Q4).**
+  `local_hermesagent_ensure_bridge_running()` only `sleep(1)`'d after
+  launching the bridge before returning false, racing the 5–15s cold boot and
+  surfacing "Connection error — check console" that self-healed on the next
+  attempt. Now it polls `/health` for up to 30s before giving up.
+- **Bootstrap completion detection was racy (Q3).** `settings.php` used
+  `ps aux | grep bootstrap.sh` which misfires (the log is truncated at run
+  start, and `grep` timing + a stale "complete" marker from the previous run
+  could misreport). `settings_action.php` now launches bootstrap inside a
+  backgrounded subshell that writes `$HERMES_HOME/bootstrap.pid` and removes
+  it on exit; `settings.php` checks `posix_kill(pid, 0)` against that pidfile
+  and only falls back to the old `ps | grep` when no pidfile is present.
+- **Hyperlink contrast (Q6).** Moodle's default link blue was nearly
+  invisible against the indigo user bubble (#4f46e5) and the light-grey
+  inline-code background. Added explicit per-context link colors in
+  `chat.css`: white/underline in user bubbles, indigo/underline in assistant
+  bubbles, and a readable purple for `<a><code>` combos.
+
+### Notes
+- The CHANGELOG has a pre-existing gap: `[0.5.10]` and `[0.5.11]` entries were
+  never written (the git tags exist but the sections are missing). 0.5.12 is
+  the first properly-documented entry since 0.5.9. Backfilling 0.5.10/0.5.11
+  is deferred — not part of this change.
+
 ## [0.5.9] — 2026-08-21
 
 ### Added

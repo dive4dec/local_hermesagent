@@ -82,10 +82,25 @@ if ($hassiteconfig) {
 
     // Bootstrap status row
     $bootstrap_log = "$hermes_home/bootstrap_update.log";
+    $bootstrap_pidfile = "$hermes_home/bootstrap.pid";
+    // Liveness: prefer the pidfile written by settings_action.php (the
+    // backgrounded subshell removes it on exit). Fall back to `ps | grep` only
+    // if no pidfile is present (e.g. bootstrap started by an older version).
     $bootstrap_running = false;
-    exec("ps aux 2>/dev/null | grep 'bootstrap.sh' | grep -v grep", $ps_out, $ps_rc);
-    if (!empty($ps_out)) {
-        $bootstrap_running = true;
+    if (is_file($bootstrap_pidfile)) {
+        $bootstrap_pid = intval(trim((string)@file_get_contents($bootstrap_pidfile)));
+        if ($bootstrap_pid > 0 && @posix_kill($bootstrap_pid, 0)) {
+            $bootstrap_running = true;
+        } else {
+            // Process gone — stale pidfile. Clean it up.
+            @unlink($bootstrap_pidfile);
+        }
+    } else {
+        $ps_out = [];
+        exec("ps aux 2>/dev/null | grep 'bootstrap.sh' | grep -v grep", $ps_out, $ps_rc);
+        if (!empty($ps_out)) {
+            $bootstrap_running = true;
+        }
     }
     if ($bootstrap_running) {
         $bootstrap_status = '<span class="text-warning"><i class="icon fa fa-spinner fa-spin"></i> Running...</span>';

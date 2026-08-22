@@ -26,6 +26,17 @@
     hermes-agent is 0.19.0 — **0.20.x is not on PyPI** as of this date.
 
 ### Fixed
+- **`Update & Bootstrap` returned 504 Gateway Time-out.** The backgrounded job
+  (snapshot → bootstrap → restart, ~10 min) was launched with `sh … &` while
+  still inheriting the PHP-FPM request's stdout/stderr pipe, so PHP's
+  `exec()` blocked until the *entire* job finished — well past nginx's ~60 s
+  timeout — and the browser showed 504 (even though the job was actually
+  running fine in the background). Now the job is fully detached with
+  `setsid sh -c '…' </dev/null >/dev/null 2>&1 &`: `exec()` returns in ~5 ms
+  and the request completes immediately. Also fixed the liveness marker: the
+  pidfile now holds the job's own PID (written by the job's first action
+  `echo $$`), so the "already in progress" guard reliably blocks the
+  duplicate clicks that the 504 was causing.
 - **`sync.sh` stripped the executable bit from `.sh` scripts.** It ran a
   blanket `find … -exec chmod 0644` over every synced file, so control
   scripts (already `100755` in git) arrived as `644`. Anything guarding on

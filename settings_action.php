@@ -16,15 +16,29 @@ $hermes_home = '/var/www/moodledata/.hermes';
 $action = required_param('action', PARAM_ALPHANUM);
 confirm_sesskey();
 
-// Launch a hermes-venv.sh subcommand in the background (it takes minutes),
-// writing output to a pidfile (liveness) + log (tail). Returns the log path.
+// Launch a hermes-venv.sh subcommand fully detached in the background.
+//
+// Two things MUST be right here or the admin UI breaks:
+//   1. The job must NOT inherit the PHP-FPM request's stdout/stderr pipe,
+//      otherwise PHP exec() blocks until the whole job (minutes) exits and
+//      nginx returns 504 Gateway Time-out. Fix: setsid + </dev/null and
+//      stdout/stderr redirected to the log file.
+//   2. The liveness pidfile must hold the JOB's own PID (echo $$ as the job's
+//      first action), not a transient wrapper PID, so the "already in
+//      progress" guard reliably blocks duplicate clicks. The job removes the
+//      pidfile as its last action.
+// Returns the log path.
 function hermes_venv_bg(string $op, string $arg, string $logname, string $hermes_home): string {
     $script = __DIR__ . '/scripts/hermes-venv.sh';
-    $log = $hermes_home . '/' . $logname;
-    $pid = $hermes_home . '/.' . $logname . '.pid';
-    $argq = escapeshellarg($arg);
-    $cmd = '( HERMES_HOME=' . escapeshellarg($hermes_home) . ' sh ' . escapeshellarg($script) . ' ' . $op . ' ' . $argq
-        . ' >> ' . escapeshellarg($log) . ' 2>&1; rm -f ' . escapeshellarg($pid) . ' ) & echo $! > ' . escapeshellarg($pid);
+    $log    = $hermes_home . '/' . $logname;
+    $pid    = $hermes_home . '/.' . $logname . '.pid';
+    // $arg is validated upstream (snapshot: empty; restore: PARAM_FILE filename,
+    // i.e. [A-Za-z0-9._-]), so it is safe to inline inside the single-quoted
+    // sh -c body.
+    $inner = 'echo $$ > ' . $pid
+        . '; HERMES_HOME=' . $hermes_home . ' sh ' . $script . ' ' . $op . ' ' . $arg
+        . ' >> ' . $log . ' 2>&1; rc=$?; rm -f ' . $pid . '; exit $rc';
+    $cmd = 'setsid sh -c \'' . $inner . '\' </dev/null >/dev/null 2>&1 &';
     exec($cmd);
     return $log;
 }
@@ -104,20 +118,23 @@ switch ($action) {
             $message = 'A snapshot / update / restore is already in progress. Check its status below.';
             redirect($redirect_url, $message, 5, \core\output\notification::NOTIFY_WARNING);
         }
-        $bootstrap_script = escapeshellarg(__DIR__ . '/scripts/bootstrap.sh');
-        $venv_script = escapeshellarg(__DIR__ . '/scripts/hermes-venv.sh');
-        $bridge_script = escapeshellarg(__DIR__ . '/hermes-bridge-control.sh');
+        $bootstrap_script = __DIR__ . '/scripts/bootstrap.sh';
+        $venv_script = __DIR__ . '/scripts/hermes-venv.sh';
+        $bridge_script = __DIR__ . '/hermes-bridge-control.sh';
         $log_file = $hermes_home . '/bootstrap_update.log';
         $pid_file = $hermes_home . '/bootstrap.pid';
-        $env = 'HERMES_HOME=' . escapeshellarg($hermes_home);
-        // Backgrounded SUBSHELL: (1) snapshot, (2) bootstrap (uv --upgrade),
+        // Detached chain: (1) snapshot, (2) bootstrap (uv --upgrade),
         // (3) restart the bridge so the new code actually loads, then remove
-        // the pidfile. The subshell PID ($!) stays alive for the whole run —
-        // the reliable liveness marker settings.php checks via posix_kill.
-        $cmd = '( ' . $env . ' sh ' . $venv_script . ' snapshot >> ' . escapeshellarg($log_file)
-            . ' 2>&1; ' . $env . ' sh ' . $bootstrap_script . ' >> ' . escapeshellarg($log_file)
-            . ' 2>&1; sh ' . $bridge_script . ' restart >> ' . escapeshellarg($log_file)
-            . ' 2>&1; rm -f ' . escapeshellarg($pid_file) . ' ) & echo $! > ' . escapeshellarg($pid_file);
+        // the pidfile. echo $$ writes THIS subshell's own PID as the liveness
+        // marker; setsid + </dev/null + stdio->log keeps it from inheriting the
+        // PHP-FPM request pipe (which would make exec() block until the whole
+        // job ends and nginx would return 504).
+        $inner = 'echo $$ > ' . $pid_file
+            . '; HERMES_HOME=' . $hermes_home . ' sh ' . $venv_script . ' snapshot >> ' . $log_file . ' 2>&1'
+            . '; HERMES_HOME=' . $hermes_home . ' sh ' . $bootstrap_script . ' >> ' . $log_file . ' 2>&1'
+            . '; sh ' . $bridge_script . ' restart >> ' . $log_file . ' 2>&1'
+            . '; rm -f ' . $pid_file . '; exit 0';
+        $cmd = 'setsid sh -c \'' . $inner . '\' </dev/null >/dev/null 2>&1 &';
         exec($cmd);
         $message = 'Update started in background — it snapshots the current venv (rollback point), '
             . 'upgrades hermes-agent, then restarts the bridge. Check the status below.';
